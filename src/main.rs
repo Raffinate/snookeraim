@@ -267,13 +267,16 @@ fn weak_copy(material: &WeakMaterial) -> WeakMaterial {
     unsafe { WeakMaterial::from_raw(*material.as_ref()) }
 }
 
-/// Horizontal (table-plane) unit vector from the camera through the cue
-/// ball and beyond — i.e. the direction the cue ball travels on a straight
-/// shot from the current viewing angle. `None` when the camera sits
-/// directly above/below the ball (undefined bearing).
-fn shot_direction_xz(camera_pos: Vector3, cue_ball_pos: Vector3) -> Option<(f32, f32)> {
-    let dx = cue_ball_pos.x - camera_pos.x;
-    let dz = cue_ball_pos.z - camera_pos.z;
+/// Horizontal (table-plane) unit vector along the camera's own look
+/// direction (target − position) — i.e. the direction the cue ball travels
+/// on a straight shot from the current viewing angle. This tracks the
+/// camera's *orientation*, not its position relative to the ball, so
+/// panning the camera (which shifts position and target together) doesn't
+/// swing the aim — only actually rotating the view does. `None` when the
+/// camera looks straight up/down (undefined horizontal bearing).
+fn shot_direction_xz(camera: Camera3D) -> Option<(f32, f32)> {
+    let dx = camera.target.x - camera.position.x;
+    let dz = camera.target.z - camera.position.z;
     let len = (dx * dx + dz * dz).sqrt();
     if len < 1e-4 {
         return None;
@@ -281,14 +284,12 @@ fn shot_direction_xz(camera_pos: Vector3, cue_ball_pos: Vector3) -> Option<(f32,
     Some((dx / len, dz / len))
 }
 
-/// Draws the cue resting behind the cue ball. Its azimuth (shot direction)
-/// follows the camera's horizontal bearing around the ball, but unlike the
-/// camera it doesn't pitch up/down with the view — it stays near-horizontal,
-/// raised by a fixed small angle from tip to butt, like a real stance.
-fn draw_cue(d: &mut impl RaylibDraw3D, camera_pos: Vector3, cue_ball_pos: Vector3) {
-    let Some((sx, sz)) = shot_direction_xz(camera_pos, cue_ball_pos) else {
-        return;
-    };
+/// Draws the cue resting behind the cue ball, parallel to the camera's
+/// horizontal look direction — unlike the camera it doesn't pitch up/down
+/// with the view, staying near-horizontal, raised by a fixed small angle
+/// from tip to butt, like a real stance.
+fn draw_cue(d: &mut impl RaylibDraw3D, shot_dir: (f32, f32), cue_ball_pos: Vector3) {
+    let (sx, sz) = shot_dir;
     let elevation = CUE_ELEVATION_DEG.to_radians();
     let horiz = elevation.cos();
     // Cue points from the ball back toward the camera (butt side), i.e.
@@ -350,12 +351,8 @@ struct CueRaycast {
     hit_object_ball: bool,
 }
 
-fn cue_raycast(
-    camera_pos: Vector3,
-    cue_ball_pos: Vector3,
-    object_ball_pos: Vector3,
-) -> Option<CueRaycast> {
-    let (dx, dz) = shot_direction_xz(camera_pos, cue_ball_pos)?;
+fn cue_raycast(shot_dir: (f32, f32), cue_ball_pos: Vector3, object_ball_pos: Vector3) -> CueRaycast {
+    let (dx, dz) = shot_dir;
 
     // Contact with the object ball: 2D ray-circle intersection, where the
     // circle radius is the sum of both ball radii (centers meet at contact).
@@ -373,10 +370,10 @@ fn cue_raycast(
     let contact = t_ball.filter(|t| *t < t_cushion);
     let t = contact.unwrap_or(t_cushion);
 
-    Some(CueRaycast {
+    CueRaycast {
         ghost_pos: Vector3::new(cue_ball_pos.x + dx * t, BALL_RADIUS, cue_ball_pos.z + dz * t),
         hit_object_ball: contact.is_some(),
-    })
+    }
 }
 
 /// Picks the pocket that gives the easiest ("straightest") pot for the
@@ -478,21 +475,21 @@ struct ShotTest {
 /// through its center, no spin) to its own first event: passing through the
 /// target gate (potted) or hitting a cushion (missed).
 fn test_shot(
-    camera_pos: Vector3,
+    shot_dir: (f32, f32),
     cue_ball_pos: Vector3,
     object_ball_pos: Vector3,
     pocket_pos: Vector3,
     gate_dir: (f32, f32),
-) -> Option<ShotTest> {
-    let raycast = cue_raycast(camera_pos, cue_ball_pos, object_ball_pos)?;
+) -> ShotTest {
+    let raycast = cue_raycast(shot_dir, cue_ball_pos, object_ball_pos);
     let white_end = raycast.ghost_pos;
 
     if !raycast.hit_object_ball {
-        return Some(ShotTest {
+        return ShotTest {
             white_end,
             red_path: None,
             gate_state: GateState::Miss,
-        });
+        };
     }
 
     // Object ball departs along the line from the contact point through its
@@ -501,11 +498,11 @@ fn test_shot(
     let rdz = object_ball_pos.z - white_end.z;
     let rlen = (rdx * rdx + rdz * rdz).sqrt();
     if rlen < 1e-5 {
-        return Some(ShotTest {
+        return ShotTest {
             white_end,
             red_path: None,
             gate_state: GateState::Miss,
-        });
+        };
     }
     let (rdx, rdz) = (rdx / rlen, rdz / rlen);
 
@@ -537,11 +534,11 @@ fn test_shot(
         object_ball_pos.z + rdz * red_end_t,
     );
 
-    Some(ShotTest {
+    ShotTest {
         white_end,
         red_path: Some((object_ball_pos, red_end)),
         gate_state,
-    })
+    }
 }
 
 /// Draws the potting "gate" at a pocket: two posts spanning a bit wider
@@ -695,7 +692,7 @@ fn main() {
     let mut view_mode = false;
     let mut saved_camera: Option<Camera3D> = None;
     let mut last_view_camera: Option<Camera3D> = None;
-    let mut frozen_aim_camera_pos = camera.position;
+    let mut frozen_aim_camera = camera;
 
     let light_panels = light_panel_centers();
 
@@ -768,7 +765,7 @@ fn main() {
                     camera.target = cue_ball_pos;
                     camera.position = camera.position + offset;
                 }
-                frozen_aim_camera_pos = camera.position;
+                frozen_aim_camera = camera;
             }
             view_mode = !view_mode;
         }
@@ -782,21 +779,18 @@ fn main() {
 
         // While in view mode, the cue's aim stays frozen at whatever it was
         // when view mode was entered, even as the camera keeps moving.
-        let aim_camera_pos = if view_mode {
-            frozen_aim_camera_pos
-        } else {
-            camera.position
-        };
+        let aim_camera = if view_mode { frozen_aim_camera } else { camera };
+        let shot_dir = shot_direction_xz(aim_camera);
 
-        if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
+        if let (true, Some(dir)) = (rl.is_key_pressed(KeyboardKey::KEY_SPACE), shot_dir) {
             let (pocket_idx, gate_dir) = target_pocket;
-            shot_test = test_shot(
-                aim_camera_pos,
+            shot_test = Some(test_shot(
+                dir,
                 cue_ball_pos,
                 object_ball_pos,
                 pockets[pocket_idx].position,
                 gate_dir,
-            );
+            ));
         }
 
         let pan_dist = PAN_SPEED * rl.get_frame_time();
@@ -870,10 +864,11 @@ fn main() {
                 Matrix::translate(object_ball_pos.x, object_ball_pos.y, object_ball_pos.z),
             );
 
-            draw_cue(&mut d3, aim_camera_pos, cue_ball_pos);
+            if let Some(dir) = shot_dir {
+                draw_cue(&mut d3, dir, cue_ball_pos);
 
-            if show_ghost_ball {
-                if let Some(raycast) = cue_raycast(aim_camera_pos, cue_ball_pos, object_ball_pos) {
+                if show_ghost_ball {
+                    let raycast = cue_raycast(dir, cue_ball_pos, object_ball_pos);
                     d3.draw_sphere(raycast.ghost_pos, BALL_RADIUS, GHOST_BALL_COLOR);
                     if show_aim_line && raycast.hit_object_ball {
                         draw_object_ball_aim_line(&mut d3, raycast.ghost_pos, object_ball_pos);
