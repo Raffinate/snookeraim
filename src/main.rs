@@ -74,6 +74,51 @@ void main()
 }
 "#;
 
+// Ghost-ball shader: same Blinn-Phong shading as the real balls (so ghosts
+// get a highlight and a shaded side — visual volume, not a flat disc), but
+// with alpha taken directly from colDiffuse.a instead of the ball
+// shader's formula, which pushes alpha above 1 via its specular/ambient
+// terms and so can't be used for anything translucent.
+const GHOST_FS: &str = r#"
+#version 330
+
+in vec3 fragPosition;
+in vec3 fragNormal;
+
+uniform vec4 colDiffuse;
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+#define NUM_LIGHTS 3
+uniform vec3 lightPos[NUM_LIGHTS];
+uniform vec4 lightColor[NUM_LIGHTS];
+
+out vec4 finalColor;
+
+void main()
+{
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+
+    vec3 lightDot = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < NUM_LIGHTS; i++)
+    {
+        vec3 lightDir = normalize(lightPos[i] - fragPosition);
+        float NdotL = max(dot(normal, lightDir), 0.0);
+        lightDot += lightColor[i].rgb * NdotL;
+
+        float specCo = 0.0;
+        if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-lightDir, normal))), 24.0);
+        specular += specCo * lightColor[i].rgb;
+    }
+
+    vec3 shaded = colDiffuse.rgb * (ambient.rgb + lightDot) + specular;
+    finalColor = vec4(shaded, colDiffuse.a);
+}
+"#;
+
 // Real-world snooker dimensions, in meters.
 const TABLE_LENGTH: f32 = 3.569; // long axis (Z)
 const TABLE_WIDTH: f32 = 1.778; // short axis (X)
@@ -716,6 +761,18 @@ fn main() {
     let mut ball_material = rl.load_material_default(&thread);
     ball_material.set_shader(&ball_shader);
 
+    let mut ghost_shader = rl.load_shader_from_memory(&thread, Some(BALL_VS), Some(GHOST_FS));
+    let ghost_ambient_loc = ghost_shader.get_shader_location("ambient");
+    let ghost_view_pos_loc = ghost_shader.get_shader_location("viewPos");
+    let ghost_light_pos_loc = ghost_shader.get_shader_location("lightPos");
+    let ghost_light_color_loc = ghost_shader.get_shader_location("lightColor");
+    ghost_shader.set_shader_value(ghost_ambient_loc, Vector4::new(0.35, 0.35, 0.35, 1.0));
+    ghost_shader.set_shader_value_v(ghost_light_pos_loc, &light_panels);
+    ghost_shader.set_shader_value_v(ghost_light_color_loc, &light_colors);
+
+    let mut ghost_material = rl.load_material_default(&thread);
+    ghost_material.set_shader(&ghost_shader);
+
     while !rl.window_should_close() {
         if rl.is_key_pressed(KeyboardKey::KEY_R) {
             if shot_test.is_some() {
@@ -841,6 +898,7 @@ fn main() {
         }
 
         ball_shader.set_shader_value(view_pos_loc, camera.position);
+        ghost_shader.set_shader_value(ghost_view_pos_loc, camera.position);
 
         let mut d = rl.begin_drawing(&thread);
         d.clear_background(Color::new(30, 30, 30, 255));
@@ -869,7 +927,12 @@ fn main() {
 
                 if show_ghost_ball {
                     let raycast = cue_raycast(dir, cue_ball_pos, object_ball_pos);
-                    d3.draw_sphere(raycast.ghost_pos, BALL_RADIUS, GHOST_BALL_COLOR);
+                    ghost_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, GHOST_BALL_COLOR);
+                    d3.draw_mesh(
+                        &ball_mesh,
+                        weak_copy(&ghost_material),
+                        Matrix::translate(raycast.ghost_pos.x, raycast.ghost_pos.y, raycast.ghost_pos.z),
+                    );
                     if show_aim_line && raycast.hit_object_ball {
                         draw_object_ball_aim_line(&mut d3, raycast.ghost_pos, object_ball_pos);
                     }
@@ -888,7 +951,12 @@ fn main() {
                 draw_path_stripe(&mut d3, cue_ball_pos, test.white_end, PATH_WHITE_COLOR);
                 if let Some((start, end)) = test.red_path {
                     draw_path_stripe(&mut d3, start, end, PATH_RED_COLOR);
-                    d3.draw_sphere(end, BALL_RADIUS, GHOST_RED_BALL_COLOR);
+                    ghost_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, GHOST_RED_BALL_COLOR);
+                    d3.draw_mesh(
+                        &ball_mesh,
+                        weak_copy(&ghost_material),
+                        Matrix::translate(end.x, end.y, end.z),
+                    );
                 }
             }
         }
