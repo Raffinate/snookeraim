@@ -247,6 +247,121 @@ void main()
 }
 "#;
 
+// Table-model shader: same Blinn-Phong/light-panel setup as the balls, but
+// also samples the model's own metalness map (texture1 -- raylib's glTF
+// loader auto-binds it there, and LoadShaderFromMemory auto-detects
+// "texture1" as SHADER_LOC_MAP_SPECULAR for any shader, not just the
+// default one) to vary shininess per material: matte cloth/wood stays
+// dull, any glossier/metal trim gets a tighter, stronger highlight. Not
+// full PBR (no roughness map, no real reflections) -- just enough to make
+// the loaded materials feel differentiated instead of uniformly plasticky.
+
+#[cfg(not(target_os = "emscripten"))]
+const TABLE_FS: &str = r#"
+#version 330
+
+in vec3 fragPosition;
+in vec2 fragTexCoord;
+in vec4 fragColor;
+in vec3 fragNormal;
+
+uniform sampler2D texture0;
+uniform sampler2D texture1;
+uniform vec4 colDiffuse;
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+#define NUM_LIGHTS 3
+uniform vec3 lightPos[NUM_LIGHTS];
+uniform vec4 lightColor[NUM_LIGHTS];
+
+out vec4 finalColor;
+
+void main()
+{
+    vec4 texelColor = texture(texture0, fragTexCoord);
+    float metalness = texture(texture1, fragTexCoord).r;
+    float shininess = mix(8.0, 64.0, metalness);
+    float specStrength = mix(0.05, 0.6, metalness);
+
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+
+    vec3 lightDot = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < NUM_LIGHTS; i++)
+    {
+        vec3 lightDir = normalize(lightPos[i] - fragPosition);
+        float NdotL = max(dot(normal, lightDir), 0.0);
+        lightDot += lightColor[i].rgb * NdotL;
+
+        float specCo = 0.0;
+        if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-lightDir, normal))), shininess);
+        specular += specCo * specStrength * lightColor[i].rgb;
+    }
+
+    vec4 tint = colDiffuse * fragColor;
+
+    finalColor = texelColor * ((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0));
+    finalColor += texelColor * (ambient / 10.0) * tint;
+    finalColor = pow(finalColor, vec4(1.0 / 2.2));
+}
+"#;
+
+#[cfg(target_os = "emscripten")]
+const TABLE_FS: &str = r#"#version 300 es
+precision mediump float;
+
+in vec3 fragPosition;
+in vec2 fragTexCoord;
+in vec4 fragColor;
+in vec3 fragNormal;
+
+uniform sampler2D texture0;
+uniform sampler2D texture1;
+uniform vec4 colDiffuse;
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+#define NUM_LIGHTS 3
+uniform vec3 lightPos[NUM_LIGHTS];
+uniform vec4 lightColor[NUM_LIGHTS];
+
+out vec4 finalColor;
+
+void main()
+{
+    vec4 texelColor = texture(texture0, fragTexCoord);
+    float metalness = texture(texture1, fragTexCoord).r;
+    float shininess = mix(8.0, 64.0, metalness);
+    float specStrength = mix(0.05, 0.6, metalness);
+
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+
+    vec3 lightDot = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < NUM_LIGHTS; i++)
+    {
+        vec3 lightDir = normalize(lightPos[i] - fragPosition);
+        float NdotL = max(dot(normal, lightDir), 0.0);
+        lightDot += lightColor[i].rgb * NdotL;
+
+        float specCo = 0.0;
+        if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-lightDir, normal))), shininess);
+        specular += specCo * specStrength * lightColor[i].rgb;
+    }
+
+    vec4 tint = colDiffuse * fragColor;
+
+    finalColor = texelColor * ((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0));
+    finalColor += texelColor * (ambient / 10.0) * tint;
+    finalColor = pow(finalColor, vec4(1.0 / 2.2));
+}
+"#;
+
 // Real-world snooker dimensions, in meters.
 const TABLE_LENGTH: f32 = 3.569; // long axis (Z)
 const TABLE_WIDTH: f32 = 1.778; // short axis (X)
@@ -1178,9 +1293,21 @@ fn main() {
     let mut ghost_material = rl.load_material_default(&thread);
     ghost_material.set_shader(&ghost_shader);
 
-    let table_model = rl
+    let mut table_shader = rl.load_shader_from_memory(&thread, Some(BALL_VS), Some(TABLE_FS));
+    let table_ambient_loc = table_shader.get_shader_location("ambient");
+    let table_view_pos_loc = table_shader.get_shader_location("viewPos");
+    let table_light_pos_loc = table_shader.get_shader_location("lightPos");
+    let table_light_color_loc = table_shader.get_shader_location("lightColor");
+    table_shader.set_shader_value(table_ambient_loc, Vector4::new(0.35, 0.35, 0.35, 1.0));
+    table_shader.set_shader_value_v(table_light_pos_loc, &light_panels);
+    table_shader.set_shader_value_v(table_light_color_loc, &light_colors);
+
+    let mut table_model = rl
         .load_model(&thread, TABLE_MODEL_PATH)
         .expect("failed to load assets/snooker_table.glb");
+    for material in table_model.materials_mut() {
+        material.set_shader(&table_shader);
+    }
 
     while !rl.window_should_close() {
         let mouse = rl.get_mouse_position();
@@ -1410,6 +1537,7 @@ fn main() {
 
         ball_shader.set_shader_value(view_pos_loc, camera.position);
         ghost_shader.set_shader_value(ghost_view_pos_loc, camera.position);
+        table_shader.set_shader_value(table_view_pos_loc, camera.position);
 
         let mut d = rl.begin_drawing(&thread);
         d.clear_background(Color::new(30, 30, 30, 255));

@@ -112,6 +112,100 @@ print(f"nodes: {len(nodes)} -> {len(new_nodes)}")
 print(f"meshes: {len(meshes)} -> {len(new_meshes)}")
 print(f"materials: {len(materials)} -> {len(new_materials)}")
 
+# --- drop now-orphaned textures/images (used by nothing in new_materials) ---
+# Removing nodes/meshes/materials above only unhooks JSON *references* --
+# the underlying image bytes stay in the binary buffer unless we also trim
+# the buffer itself, so this second pass physically cuts them out.
+textures = gltf["textures"]
+images = gltf["images"]
+buffer_views = gltf["bufferViews"]
+
+used_tex = set()
+for m in new_materials:
+    pbr = m.get("pbrMetallicRoughness", {})
+    for key in ("baseColorTexture", "metallicRoughnessTexture"):
+        if key in pbr:
+            used_tex.add(pbr[key]["index"])
+    for key in ("normalTexture", "occlusionTexture", "emissiveTexture"):
+        if key in m:
+            used_tex.add(m[key]["index"])
+used_img = {textures[t]["source"] for t in used_tex}
+remove_img = set(range(len(images))) - used_img
+remove_bv_img = {images[i]["bufferView"] for i in remove_img}
+
+# Physically cut the removed images' bytes out of the binary buffer. They
+# were verified contiguous (a single run of bufferViews, all in one
+# buffer, with no accessor pointing into that range) via manual inspection
+# of this specific file -- re-verify if the source model ever changes.
+assert all(buffer_views[bv]["buffer"] == 0 for bv in remove_bv_img)
+cut_ranges = sorted(
+    (buffer_views[bv]["byteOffset"], buffer_views[bv]["byteOffset"] + buffer_views[bv]["byteLength"])
+    for bv in remove_bv_img
+)
+for (s1, e1), (s2, e2) in zip(cut_ranges, cut_ranges[1:]):
+    assert e1 == s2, "removed image bufferViews are not contiguous -- cannot safely cut bytes"
+cut_start, cut_end = cut_ranges[0][0], cut_ranges[-1][1]
+assert all(a.get("bufferView") not in remove_bv_img for a in gltf["accessors"])
+
+new_bin_bytes_raw = bin_bytes[:cut_start] + bin_bytes[cut_end:]
+cut_len = cut_end - cut_start
+
+def shift_offset(bv):
+    offset = bv.get("byteOffset", 0)
+    if offset >= cut_end:
+        bv["byteOffset"] = offset - cut_len
+
+remaining_bvs = [bv for i, bv in enumerate(buffer_views) if i not in remove_bv_img]
+for bv in remaining_bvs:
+    shift_offset(bv)
+
+old_to_new_bv = {}
+n = 0
+for i in range(len(buffer_views)):
+    if i in remove_bv_img:
+        continue
+    old_to_new_bv[i] = n
+    n += 1
+
+for a in gltf["accessors"]:
+    if a.get("bufferView") is not None:
+        a["bufferView"] = old_to_new_bv[a["bufferView"]]
+
+new_images = []
+old_to_new_img = {}
+for i, im in enumerate(images):
+    if i in remove_img:
+        continue
+    old_to_new_img[i] = len(new_images)
+    im["bufferView"] = old_to_new_bv[im["bufferView"]]
+    new_images.append(im)
+
+new_textures = []
+old_to_new_tex = {}
+for i, tex in enumerate(textures):
+    if i not in used_tex:
+        continue
+    old_to_new_tex[i] = len(new_textures)
+    tex["source"] = old_to_new_img[tex["source"]]
+    new_textures.append(tex)
+
+for m in new_materials:
+    pbr = m.get("pbrMetallicRoughness", {})
+    for key in ("baseColorTexture", "metallicRoughnessTexture"):
+        if key in pbr:
+            pbr[key]["index"] = old_to_new_tex[pbr[key]["index"]]
+    for key in ("normalTexture", "occlusionTexture", "emissiveTexture"):
+        if key in m:
+            m[key]["index"] = old_to_new_tex[m[key]["index"]]
+
+gltf["bufferViews"] = remaining_bvs
+gltf["images"] = new_images
+gltf["textures"] = new_textures
+gltf["buffers"][0]["byteLength"] = len(new_bin_bytes_raw)
+bin_bytes = new_bin_bytes_raw
+
+print(f"images: {len(images)} -> {len(new_images)} (reclaimed {cut_len} bytes)")
+
 # --- repack as .glb ---
 def pad(b, fill):
     n = (4 - len(b) % 4) % 4
