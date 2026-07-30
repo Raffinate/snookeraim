@@ -679,7 +679,7 @@ fn aiming_camera(cue_ball_pos: Vector3, object_ball_pos: Vector3) -> Camera3D {
         cue_ball_pos.z + bz * CAMERA_BACK_DISTANCE,
     );
 
-    Camera3D::perspective(position, object_ball_pos, Vector3::new(0.0, 1.0, 0.0), 45.0)
+    Camera3D::perspective(position, cue_ball_pos, Vector3::new(0.0, 1.0, 0.0), 45.0)
 }
 
 /// Where the mouse cursor's ray meets the table plane (y = 0), if it does
@@ -810,10 +810,13 @@ fn main() {
                     camera = saved;
                 }
             } else {
-                saved_camera = Some(camera);
-                if let Some(resume) = last_view_camera {
-                    camera = resume;
-                } else {
+                // The frozen aim must come from the normal-mode camera (the
+                // one the player actually aims with) — captured here,
+                // before any swap to a resumed free-roam view below.
+                // Otherwise, re-entering after having zoomed/orbited around
+                // while inspecting would redefine the "frozen" aim from
+                // that free-roam drift instead of the real aim.
+                if last_view_camera.is_none() {
                     // First time entering this session: re-center the orbit
                     // pivot on the cue ball (instead of whatever the target
                     // happened to be) so rotating while inspecting orbits
@@ -823,6 +826,11 @@ fn main() {
                     camera.position = camera.position + offset;
                 }
                 frozen_aim_camera = camera;
+                saved_camera = Some(camera);
+
+                if let Some(resume) = last_view_camera {
+                    camera = resume;
+                }
             }
             view_mode = !view_mode;
         }
