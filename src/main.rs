@@ -1257,7 +1257,13 @@ fn main() {
                 camera.yaw(-key_rotate, true);
             }
 
-            if held && !over_ui {
+            if held && !over_ui && !tap {
+                // Skip the exact press frame: on touch devices there's no
+                // cursor easing into position beforehand, so the browser's
+                // synthesized mouse position jumps straight from wherever it
+                // last was to the tap point on this same frame. Reading that
+                // as a drag delta would snap the camera toward the tap
+                // instead of orbiting from it.
                 let delta = rl.get_mouse_delta();
                 // On the table: real distance to the point under the cursor.
                 // Off the table: the virtual cone (angle-only, continuous —
