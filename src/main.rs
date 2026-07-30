@@ -134,6 +134,7 @@ const CUE_BUTT_RADIUS: f32 = 0.014;
 const CUE_TIP_GAP: f32 = 0.004;
 const CUE_ELEVATION_DEG: f32 = 8.0;
 const PAN_SPEED: f32 = 1.2; // meters per second
+const KEY_ROTATE_SPEED_DEG: f32 = 90.0; // degrees per second, for Q/E
 const CAMERA_ELEVATION_DEG: f32 = 15.0; // above the cue ball, as seen when aiming
 const CAMERA_BACK_DISTANCE: f32 = 0.7; // behind the cue ball, away from the object ball
 
@@ -872,6 +873,14 @@ fn main() {
             camera.move_right(pan_dist, true);
         }
 
+        let key_rotate = KEY_ROTATE_SPEED_DEG.to_radians() * rl.get_frame_time();
+        if rl.is_key_down(KeyboardKey::KEY_Q) {
+            camera.yaw(key_rotate, true);
+        }
+        if rl.is_key_down(KeyboardKey::KEY_E) {
+            camera.yaw(-key_rotate, true);
+        }
+
         if rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT) {
             let delta = rl.get_mouse_delta();
             // On the table: real distance to the point under the cursor.
@@ -971,7 +980,7 @@ fn main() {
 
         d.draw_fps(10, 10);
         d.draw_text(
-            "Drag/scroll: orbit  |  WASD/arrows: pan  |  C: center on cue ball  |  R: reposition  |  Space: test shot  |  G: ghost ball  |  H: aim line  |  V: view mode",
+            "Drag/scroll: orbit  |  WASD/arrows: pan  |  Q/E: rotate  |  C: center on cue ball  |  R: reposition  |  Space: test shot  |  G: ghost ball  |  H: aim line  |  V: view mode",
             10,
             36,
             18,
