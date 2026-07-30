@@ -306,6 +306,12 @@ void main()
     finalColor = texelColor * ((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0));
     finalColor += texelColor * (ambient / 10.0) * tint;
     finalColor = pow(finalColor, vec4(1.0 / 2.2));
+    // The lighting math above pushes alpha well past tint.a (and gamma
+    // then distorts it further) so it's useless for transparency as-is;
+    // override it directly from the tint's own alpha, post-gamma, so
+    // callers can make this opaque-by-default shader translucent just by
+    // lowering their tint color's alpha.
+    finalColor.a = texelColor.a * tint.a;
 }
 "#;
 
@@ -359,6 +365,7 @@ void main()
     finalColor = texelColor * ((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0));
     finalColor += texelColor * (ambient / 10.0) * tint;
     finalColor = pow(finalColor, vec4(1.0 / 2.2));
+    finalColor.a = texelColor.a * tint.a;
 }
 "#;
 
@@ -399,6 +406,73 @@ const ROTATE_VIRTUAL_MAX_DIST: f32 = 20.0;
 // of a cut.
 const MIN_BALL_SEPARATION: f32 = 0.18;
 const MAX_REALISTIC_CUT_DEG: f32 = 65.0;
+
+// Real cushion nose boundaries, read directly from the table model's own
+// mesh (see scripts/extract_cushion_segments.py). The nose sits recessed
+// at a near-constant distance from the table's center along each straight
+// run, then flares back out toward the flat cloth bed's edge in a window
+// right at every pocket mouth (a real cushion-facing/shoulder feature,
+// not noise) before holding flat past the corners' flare peak (the mesh
+// beyond that is the pocket throat, not a wall a ball bounces off). Both
+// tables cover only their non-negative half; each rail is symmetric about
+// its own center.
+// A real ball resting against the cushion touches it -- essentially zero
+// gap. This is only a tiny epsilon to stop the ball's rendered surface
+// from z-fighting/clipping into the nose mesh, not a real-world buffer.
+const CUSHION_CLEARANCE: f32 = 0.001;
+include!("cushion_segments.rs");
+
+/// Piecewise-linear lookup shared by safe_half_width/safe_half_length:
+/// interpolates `table`'s second column at `along`, clamped to the
+/// table's own range at either end.
+fn boundary_lookup(table: &[[f32; 2]], along: f32) -> f32 {
+    let n = table.len();
+    if along <= table[0][0] {
+        return table[0][1];
+    }
+    if along >= table[n - 1][0] {
+        return table[n - 1][1];
+    }
+    let mut result = table[n - 1][1];
+    for w in table.windows(2) {
+        let ([a0, b0], [a1, b1]) = (w[0], w[1]);
+        if along >= a0 && along <= a1 {
+            let t = (along - a0) / (a1 - a0);
+            result = b0 + (b1 - b0) * t;
+            break;
+        }
+    }
+    result
+}
+
+/// Draws a ball's collision footprint as a ring in the table plane (its
+/// actual physical radius, not the point rendered on screen) -- for the
+/// collision-debug overlay, so the boundary a ball actually occupies is
+/// visible, not just the cushion lines it collides against.
+fn draw_ball_collision_ring(d: &mut impl RaylibDraw3D, center: Vector3, color: Color) {
+    const SEGMENTS: usize = 24;
+    let y = 0.021; // just above the cushion-boundary debug lines (0.02)
+    let mut prev = Vector3::new(center.x + BALL_RADIUS, y, center.z);
+    for i in 1..=SEGMENTS {
+        let a = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let next = Vector3::new(center.x + BALL_RADIUS * a.cos(), y, center.z + BALL_RADIUS * a.sin());
+        d.draw_line3D(prev, next, color);
+        prev = next;
+    }
+}
+
+/// Safe X boundary (for a ball's *center*) at a given |z|, against the
+/// long rails: the measured cushion boundary minus the ball's own radius
+/// and a clearance margin.
+fn safe_half_width(abs_z: f32) -> f32 {
+    boundary_lookup(CUSHION_BOUNDARY, abs_z) - BALL_RADIUS - CUSHION_CLEARANCE
+}
+
+/// Safe Z boundary (for a ball's *center*) at a given |x|, against the
+/// short rails.
+fn safe_half_length(abs_x: f32) -> f32 {
+    boundary_lookup(SHORT_RAIL_BOUNDARY, abs_x) - BALL_RADIUS - CUSHION_CLEARANCE
+}
 const MAX_PLACEMENT_ATTEMPTS: u32 = 300;
 
 const GATE_WIDTH_FACTOR: f32 = 1.4; // gate width, in ball diameters
@@ -511,6 +585,9 @@ fn pockets() -> Vec<Pocket> {
 /// Picks a random point on the playing surface that stays clear of the
 /// cushions and every pocket mouth, so balls never spawn half-sunk.
 fn random_ball_position(pockets: &[Pocket], taken: &[Vector3]) -> Vector3 {
+    // Rough outer sampling box (cheap to draw from); the real boundary
+    // check below (safe_half_width, against the model's measured
+    // geometry) is what actually decides whether a candidate is accepted.
     let margin = BALL_RADIUS * 2.0;
     let hw = TABLE_WIDTH / 2.0 - margin;
     let hl = TABLE_LENGTH / 2.0 - margin;
@@ -520,12 +597,16 @@ fn random_ball_position(pockets: &[Pocket], taken: &[Vector3]) -> Vector3 {
         let z = rand::random_range(-hl..hl);
         let candidate = Vector3::new(x, BALL_RADIUS, z);
 
+        // Extra breathing room beyond bare wall clearance, same idea as the
+        // old flat `margin` above, but checked against the real cushion.
+        let clear_of_cushion = x.abs() < safe_half_width(z.abs()) - BALL_RADIUS
+            && z.abs() < safe_half_length(x.abs()) - BALL_RADIUS;
         let clear_of_pockets = pockets
             .iter()
             .all(|p| candidate.distance(p.position) > p.radius + BALL_RADIUS * 2.0);
         let clear_of_balls = taken.iter().all(|b| candidate.distance(*b) > MIN_BALL_SEPARATION);
 
-        if clear_of_pockets && clear_of_balls {
+        if clear_of_cushion && clear_of_pockets && clear_of_balls {
             return candidate;
         }
     }
@@ -656,7 +737,7 @@ fn draw_cue(d: &mut impl RaylibDraw3D, shot_dir: (f32, f32), cue_ball_pos: Vecto
 /// rotation left in it -- so orienting it is just "rotate local +X onto
 /// the world direction the tip should point", i.e. onto `-dir` (`dir`
 /// itself points tip -> butt, same convention as `draw_cue`).
-fn draw_cue_model(d: &mut impl RaylibDraw3D, model: &Model, shot_dir: (f32, f32), cue_ball_pos: Vector3) {
+fn draw_cue_model(d: &mut impl RaylibDraw3D, model: &Model, shot_dir: (f32, f32), cue_ball_pos: Vector3, tint: Color) {
     let (sx, sz) = shot_dir;
     let elevation = CUE_ELEVATION_DEG.to_radians();
     let horiz = elevation.cos();
@@ -684,30 +765,47 @@ fn draw_cue_model(d: &mut impl RaylibDraw3D, model: &Model, shot_dir: (f32, f32)
     // however far the (scaled, rotated) tip sits from that origin.
     let position = tip + dir.scale(CUE_MODEL_TIP_X * scale_x);
 
-    d.draw_model_ex(model, position, axis, angle_deg, scale, Color::WHITE);
+    d.draw_model_ex(model, position, axis, angle_deg, scale, tint);
 }
 
-/// Distance along a ray from `(x, z)` in direction `(dx, dz)` (need not be
-/// unit length, but must be a real direction) to the first cushion — i.e.
-/// where a ball's center would leave the playing rectangle inset by one
-/// ball radius.
+/// Distance along a ray from `(x, z)` in direction `(dx, dz)` to the
+/// first cushion — i.e. where a ball's center would leave the safe X
+/// range (against the long rails, safe_half_width) or the safe Z range
+/// (against the short rails, safe_half_length), both against the
+/// model's measured geometry.
 fn cushion_t(x: f32, z: f32, dx: f32, dz: f32) -> f32 {
-    let x_max = TABLE_WIDTH / 2.0 - BALL_RADIUS;
-    let z_max = TABLE_LENGTH / 2.0 - BALL_RADIUS;
-    let t_x = if dx > 1e-6 {
-        (x_max - x) / dx
-    } else if dx < -1e-6 {
-        (-x_max - x) / dx
-    } else {
-        f32::INFINITY
+    let calc_t_x = |x_max: f32| {
+        if dx > 1e-6 {
+            (x_max - x) / dx
+        } else if dx < -1e-6 {
+            (-x_max - x) / dx
+        } else {
+            f32::INFINITY
+        }
     };
-    let t_z = if dz > 1e-6 {
-        (z_max - z) / dz
-    } else if dz < -1e-6 {
-        (-z_max - z) / dz
-    } else {
-        f32::INFINITY
+    let calc_t_z = |z_max: f32| {
+        if dz > 1e-6 {
+            (z_max - z) / dz
+        } else if dz < -1e-6 {
+            (-z_max - z) / dz
+        } else {
+            f32::INFINITY
+        }
     };
+
+    // Both boundaries vary along the rail (narrower near every pocket):
+    // refine each once using the coordinate the ray would actually reach
+    // by its first estimate, since that's what decides which it really
+    // hits.
+    let mut t_x = calc_t_x(safe_half_width(z.abs()));
+    if t_x.is_finite() {
+        t_x = calc_t_x(safe_half_width((z + dz * t_x).abs()));
+    }
+    let mut t_z = calc_t_z(safe_half_length(x.abs()));
+    if t_z.is_finite() {
+        t_z = calc_t_z(safe_half_length((x + dx * t_z).abs()));
+    }
+
     t_x.min(t_z)
 }
 
@@ -778,9 +876,6 @@ fn best_pocket(
     cue_ball_pos: Vector3,
     object_ball_pos: Vector3,
 ) -> (usize, (f32, f32), f32) {
-    let x_max = TABLE_WIDTH / 2.0 - BALL_RADIUS;
-    let z_max = TABLE_LENGTH / 2.0 - BALL_RADIUS;
-
     let mut best: Option<(usize, f32, (f32, f32))> = None;
     let mut nearest: Option<(usize, f32, (f32, f32))> = None;
 
@@ -800,7 +895,7 @@ fn best_pocket(
 
         let ghost_x = object_ball_pos.x + approach_from.0 * BALL_RADIUS * 2.0;
         let ghost_z = object_ball_pos.z + approach_from.1 * BALL_RADIUS * 2.0;
-        if ghost_x.abs() > x_max || ghost_z.abs() > z_max {
+        if ghost_x.abs() > safe_half_width(ghost_z.abs()) || ghost_z.abs() > safe_half_length(ghost_x.abs()) {
             continue; // cue ball couldn't physically sit here
         }
 
@@ -1315,6 +1410,7 @@ fn main() {
     let mut frozen_aim_camera = camera;
     let mut help_visible = false;
     let mut ghost_aim_visible = true;
+    let mut show_collision_debug = false;
     // Distance between the two touch points on the previous frame, so
     // pinch-zoom can look at the *change* in spread rather than its
     // absolute value. `None` whenever fewer than two fingers are down, so
@@ -1395,6 +1491,13 @@ fn main() {
         let tap = rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
         let held = rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT);
         let over_ui = ui.hit_any(mouse);
+
+        if rl.is_key_pressed(KeyboardKey::KEY_GRAVE)
+            && (rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
+                || rl.is_key_down(KeyboardKey::KEY_RIGHT_SHIFT))
+        {
+            show_collision_debug = !show_collision_debug;
+        }
 
         if rl.is_key_pressed(KeyboardKey::KEY_SLASH) || (tap && ui.help.hit(mouse)) {
             help_visible = !help_visible;
@@ -1619,21 +1722,64 @@ fn main() {
         let mut d = rl.begin_drawing(&thread);
         d.clear_background(Color::new(30, 30, 30, 255));
 
+        // A bit see-through in collision-debug mode so the boundary lines
+        // and ball collision circles (both drawn on top) aren't hidden
+        // behind the real geometry they're describing.
+        let debug_tint = if show_collision_debug {
+            Color::new(255, 255, 255, 130)
+        } else {
+            Color::WHITE
+        };
+
         {
             let mut d3 = d.begin_mode3D(camera);
             if USE_TABLE_MODEL {
                 let offset = Vector3::new(TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z);
-                d3.draw_model(&table_model, offset, 1.0, Color::WHITE);
+                d3.draw_model(&table_model, offset, 1.0, debug_tint);
             } else {
                 draw_table(&mut d3, &pockets);
             }
             draw_light_fixture(&mut d3, &light_panels);
+
+            if show_collision_debug {
+                // Both tables only cover their own non-negative half (each
+                // rail is symmetric about its own center), so mirror both
+                // X and Z for each.
+                for w in CUSHION_BOUNDARY.windows(2) {
+                    let ([z0, x0], [z1, x1]) = (w[0], w[1]);
+                    for &sx in &[1.0, -1.0] {
+                        for &sz in &[1.0, -1.0] {
+                            d3.draw_line3D(
+                                Vector3::new(sx * x0, 0.02, sz * z0),
+                                Vector3::new(sx * x1, 0.02, sz * z1),
+                                Color::MAGENTA,
+                            );
+                        }
+                    }
+                }
+                for w in SHORT_RAIL_BOUNDARY.windows(2) {
+                    let ([x0, z0], [x1, z1]) = (w[0], w[1]);
+                    for &sx in &[1.0, -1.0] {
+                        for &sz in &[1.0, -1.0] {
+                            d3.draw_line3D(
+                                Vector3::new(sx * x0, 0.02, sz * z0),
+                                Vector3::new(sx * x1, 0.02, sz * z1),
+                                Color::CYAN,
+                            );
+                        }
+                    }
+                }
+
+                draw_ball_collision_ring(&mut d3, cue_ball_pos, Color::YELLOW);
+                draw_ball_collision_ring(&mut d3, object_ball_pos, Color::ORANGE);
+            }
 
             if USE_MODEL_PROPS {
                 // raylib always reserves materials()[0] for its own
                 // auto-inserted default material (a blank white texture) and
                 // appends the glTF file's real materials starting at index 1
                 // -- balls.glb has exactly one ("Balls"), so index 1 is it.
+                balls_model.materials_mut()[1].set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, debug_tint);
                 let balls_material = &balls_model.materials()[1];
                 let cue_ball_offset = cue_ball_pos - CUE_BALL_MODEL_CENTER;
                 d3.draw_mesh(
@@ -1666,7 +1812,7 @@ fn main() {
 
             if let Some(dir) = shot_dir {
                 if USE_MODEL_PROPS {
-                    draw_cue_model(&mut d3, &cue_model, dir, cue_ball_pos);
+                    draw_cue_model(&mut d3, &cue_model, dir, cue_ball_pos, debug_tint);
                 } else {
                     draw_cue(&mut d3, dir, cue_ball_pos);
                 }
@@ -1681,6 +1827,9 @@ fn main() {
                     );
                     if show_aim_line && raycast.hit_object_ball {
                         draw_object_ball_aim_line(&mut d3, raycast.ghost_pos, object_ball_pos);
+                    }
+                    if show_collision_debug {
+                        draw_ball_collision_ring(&mut d3, raycast.ghost_pos, Color::LIME);
                     }
                 }
             }
