@@ -117,35 +117,55 @@ def extract_subset(gltf, bin_bytes, root_node_indices):
             if p.get("indices") is not None:
                 keep_accessors.add(p["indices"])
 
-    keep_bv = set()
-    for ai in keep_accessors:
-        if accessors[ai].get("bufferView") is not None:
-            keep_bv.add(accessors[ai]["bufferView"])
-    for ii in keep_img:
-        keep_bv.add(images[ii]["bufferView"])
+    # Several accessors across *many different meshes* point into the same
+    # handful of large bufferViews (one shared position/normal/texcoord/
+    # index pool per attribute type, each accessor just slicing in via its
+    # own byteOffset) -- copying a "needed" bufferView wholesale, as a
+    # naive port would, drags in every other mesh's data too. Instead,
+    # give each kept accessor (and each kept image) its own dedicated,
+    # tightly-sliced bufferView containing only its own bytes.
+    COMPONENT_SIZES = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
+    TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
 
-    # Rebuild the binary buffer by concatenating just the retained
-    # bufferViews' bytes, in their original relative order, 4-byte
-    # aligning each segment's start (glTF requires bufferView offsets to
-    # respect their accessor's component alignment; 4 bytes covers every
-    # type used here -- floats and u32 indices).
-    ordered_bv = sorted(keep_bv, key=lambda i: buffer_views[i].get("byteOffset", 0))
     new_buf = bytearray()
-    old_to_new_bv = {}
     new_bv_list = []
-    for bv_i in ordered_bv:
-        bv = buffer_views[bv_i]
-        off = bv.get("byteOffset", 0)
-        length = bv["byteLength"]
+
+    def append_slice(data):
         while len(new_buf) % 4 != 0:
             new_buf.append(0)
-        new_offset = len(new_buf)
-        new_buf.extend(bin_bytes[off:off + length])
-        old_to_new_bv[bv_i] = len(new_bv_list)
-        new_bv = dict(bv)
-        new_bv["byteOffset"] = new_offset
-        new_bv["buffer"] = 0
+        offset = len(new_buf)
+        new_buf.extend(data)
+        return offset
+
+    def add_accessor_bufferview(acc):
+        bv = buffer_views[acc["bufferView"]]
+        elem_size = COMPONENT_SIZES[acc["componentType"]] * TYPE_COMPONENTS[acc["type"]]
+        stride = bv.get("byteStride", elem_size)
+        base = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        if stride == elem_size:
+            data = bin_bytes[base: base + acc["count"] * elem_size]
+            stride_out = None
+        else:
+            # Genuinely interleaved with other attributes -- preserve the
+            # stride pattern rather than just the tail element's bytes.
+            data = bin_bytes[base: base + (acc["count"] - 1) * stride + elem_size]
+            stride_out = stride
+        offset = append_slice(data)
+        new_bv = {"buffer": 0, "byteOffset": offset, "byteLength": len(data)}
+        if stride_out is not None:
+            new_bv["byteStride"] = stride_out
+        if bv.get("target") is not None:
+            new_bv["target"] = bv["target"]
         new_bv_list.append(new_bv)
+        return len(new_bv_list) - 1
+
+    def add_image_bufferview(old_img_idx):
+        bv = buffer_views[images[old_img_idx]["bufferView"]]
+        off = bv.get("byteOffset", 0)
+        data = bin_bytes[off: off + bv["byteLength"]]
+        offset = append_slice(data)
+        new_bv_list.append({"buffer": 0, "byteOffset": offset, "byteLength": len(data)})
+        return len(new_bv_list) - 1
 
     ordered_nodes = sorted(keep_nodes)
     old_to_new_node = {old: i for i, old in enumerate(ordered_nodes)}
@@ -198,7 +218,7 @@ def extract_subset(gltf, bin_bytes, root_node_indices):
     new_images = []
     for old in ordered_img:
         im = json.loads(json.dumps(images[old]))
-        im["bufferView"] = old_to_new_bv[im["bufferView"]]
+        im["bufferView"] = add_image_bufferview(old)
         new_images.append(im)
 
     new_textures = []
@@ -211,7 +231,8 @@ def extract_subset(gltf, bin_bytes, root_node_indices):
     for old in ordered_acc:
         a = json.loads(json.dumps(accessors[old]))
         if a.get("bufferView") is not None:
-            a["bufferView"] = old_to_new_bv[a["bufferView"]]
+            a["bufferView"] = add_accessor_bufferview(accessors[old])
+            a.pop("byteOffset", None)  # now 0 -- start of its own dedicated bufferView
         new_accessors.append(a)
 
     new_gltf = {
