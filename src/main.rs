@@ -264,6 +264,7 @@ const CUE_ELEVATION_DEG: f32 = 8.0;
 const PAN_SPEED: f32 = 1.2; // meters per second
 const KEY_ROTATE_SPEED_DEG: f32 = 90.0; // degrees per second, for Q/E
 const ZOOM_BUTTON_SPEED: f32 = 1.0; // meters per second, for the on-screen +/- buttons
+const PINCH_ZOOM_SENSITIVITY: f32 = 0.004; // per pixel of change in two-finger spread
 const CAMERA_ELEVATION_DEG: f32 = 15.0; // above the cue ball, as seen when aiming
 const CAMERA_BACK_DISTANCE: f32 = 0.7; // behind the cue ball, away from the object ball
 
@@ -830,16 +831,35 @@ fn aiming_camera(cue_ball_pos: Vector3, object_ball_pos: Vector3) -> Camera3D {
     Camera3D::perspective(position, cue_ball_pos, Vector3::new(0.0, 1.0, 0.0), 45.0)
 }
 
-/// Where the mouse cursor's ray meets the table plane (y = 0), if it does
-/// so in front of the camera. `None` when the cursor points away from the
-/// table entirely (e.g. up toward the sky).
-fn cursor_table_point(rl: &RaylibHandle, camera: Camera3D) -> Option<Vector3> {
-    let ray = rl.get_screen_to_world_ray(rl.get_mouse_position(), camera);
+/// Where a screen-space ray through `screen_pos` meets the table plane
+/// (y = 0), if it does so in front of the camera. `None` when it points
+/// away from the table entirely (e.g. up toward the sky).
+fn screen_ray_table_point(rl: &RaylibHandle, camera: Camera3D, screen_pos: Vector2) -> Option<Vector3> {
+    let ray = rl.get_screen_to_world_ray(screen_pos, camera);
     if ray.direction.y.abs() <= 1e-4 {
         return None;
     }
     let t = -ray.position.y / ray.direction.y;
     (t > 0.0).then(|| ray.position + ray.direction.scale(t))
+}
+
+/// Same as `screen_ray_table_point`, but through the mouse cursor.
+fn cursor_table_point(rl: &RaylibHandle, camera: Camera3D) -> Option<Vector3> {
+    screen_ray_table_point(rl, camera, rl.get_mouse_position())
+}
+
+/// Zooms the camera toward `hit` by `factor` (a fraction of the remaining
+/// distance, same convention as a lerp) while keeping the camera-to-target
+/// distance clamped to a sane range -- shared by wheel-zoom and pinch-zoom,
+/// which both zoom toward a specific world point rather than along the
+/// current view axis (see the on-screen zoom buttons for that variant).
+fn zoom_toward(camera: &mut Camera3D, hit: Vector3, factor: f32) {
+    camera.position = camera.position.lerp(hit, factor);
+    camera.target = camera.target.lerp(hit, factor);
+
+    let dist = camera.position.distance(camera.target).clamp(0.15, 6.0);
+    let dir = (camera.position - camera.target).normalize();
+    camera.position = camera.target + dir.scale(dist);
 }
 
 /// Same as `cursor_table_point`, but only counts as a hit within the
@@ -1102,6 +1122,12 @@ fn main() {
     let mut frozen_aim_camera = camera;
     let mut help_visible = false;
     let mut ghost_aim_visible = true;
+    // Distance between the two touch points on the previous frame, so
+    // pinch-zoom can look at the *change* in spread rather than its
+    // absolute value. `None` whenever fewer than two fingers are down, so
+    // a fresh pinch never starts from a stale distance left over from a
+    // previous one.
+    let mut pinch_prev_dist: Option<f32> = None;
 
     let light_panels = light_panel_centers();
 
@@ -1285,13 +1311,18 @@ fn main() {
                 camera.yaw(-key_rotate, true);
             }
 
-            if held && !over_ui && !tap {
+            let touch_count = rl.get_touch_point_count();
+
+            if held && !over_ui && !tap && touch_count < 2 {
                 // Skip the exact press frame: on touch devices there's no
                 // cursor easing into position beforehand, so the browser's
                 // synthesized mouse position jumps straight from wherever it
                 // last was to the tap point on this same frame. Reading that
                 // as a drag delta would snap the camera toward the tap
-                // instead of orbiting from it.
+                // instead of orbiting from it. Also skip while a second
+                // finger is down -- that's a pinch, not a one-finger orbit,
+                // and the browser's synthesized mouse position (tracking
+                // just the first finger) would otherwise fight the pinch.
                 let delta = rl.get_mouse_delta();
                 // On the table: real distance to the point under the cursor.
                 // Off the table: the virtual cone (angle-only, continuous —
@@ -1315,13 +1346,29 @@ fn main() {
                 // zooming to the orbit target.
                 if let Some(hit) = cursor_table_point(&rl, camera) {
                     let factor = (wheel * 0.15).clamp(-0.9, 0.9);
-                    camera.position = camera.position.lerp(hit, factor);
-                    camera.target = camera.target.lerp(hit, factor);
-
-                    let dist = camera.position.distance(camera.target).clamp(0.15, 6.0);
-                    let dir = (camera.position - camera.target).normalize();
-                    camera.position = camera.target + dir.scale(dist);
+                    zoom_toward(&mut camera, hit, factor);
                 }
+            }
+
+            // Pinch-zoom: two fingers down, zoom by how their spread
+            // changes frame to frame (spreading apart = zoom in), toward
+            // the point under their midpoint.
+            if touch_count >= 2 {
+                let t0 = rl.get_touch_position(0);
+                let t1 = rl.get_touch_position(1);
+                let dist = t0.distance(t1);
+                let midpoint = t0.lerp(t1, 0.5);
+                if let Some(prev) = pinch_prev_dist {
+                    let hit = screen_ray_table_point(&rl, camera, midpoint)
+                        .or_else(|| cursor_table_point(&rl, camera));
+                    if let Some(hit) = hit {
+                        let factor = ((dist - prev) * PINCH_ZOOM_SENSITIVITY).clamp(-0.9, 0.9);
+                        zoom_toward(&mut camera, hit, factor);
+                    }
+                }
+                pinch_prev_dist = Some(dist);
+            } else {
+                pinch_prev_dist = None;
             }
 
             // On-screen zoom buttons: there's no cursor-hit point to zoom
@@ -1443,6 +1490,7 @@ fn main() {
                 "",
                 "Drag / D-pad     orbit the camera",
                 "Scroll / +  -    zoom toward the cursor / camera target",
+                "Pinch            zoom toward the point between your fingers",
                 "WASD or arrows   pan the camera",
                 "Q / E            rotate (yaw) the camera",
                 "C / CENTER       re-center the orbit pivot on the cue ball",

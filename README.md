@@ -24,7 +24,7 @@ top-right) render on every platform, not just touch devices.
 | Input | On-screen button | Action |
 |---|---|---|
 | Drag (left mouse) / D-pad | pan/rotate cluster | Orbit the camera |
-| Scroll wheel | `+`/`-` | Zoom toward the cursor (wheel) or the camera target (buttons) |
+| Scroll wheel / pinch | `+`/`-` | Zoom toward the cursor or pinch midpoint (wheel/pinch), or the camera target (buttons) |
 | `W`/`A`/`S`/`D` or arrows | D-pad | Pan the camera (position + target together) |
 | `Q`/`E` | `Q`/`E` | Rotate (yaw) the camera at a fixed speed |
 | `C` | `CENTER` | Re-center the orbit pivot on the cue ball (keeps zoom/angle) |
