@@ -1,7 +1,8 @@
 EMSCRIPTEN_PREFIX := $(shell brew --prefix emscripten 2>/dev/null)
 WEB_DIR := target/wasm32-unknown-emscripten/release
+DOCS_DIR := docs
 
-.PHONY: run build web serve web-run clean
+.PHONY: run build web serve pages clean
 
 ## Native desktop app (debug, run directly)
 run:
@@ -29,6 +30,17 @@ web:
 serve: web
 	@echo "Serving $(WEB_DIR) at http://localhost:8765"
 	cd $(WEB_DIR) && python3 -m http.server 8765
+
+## Build for web and stage the output in docs/ for GitHub Pages.
+## After running this, commit docs/ and enable Pages in the repo's
+## Settings > Pages > Deploy from a branch > main / docs.
+pages: web
+	rm -rf $(DOCS_DIR)
+	mkdir -p $(DOCS_DIR)
+	cp $(WEB_DIR)/snookeraim.js $(WEB_DIR)/snookeraim.wasm $(DOCS_DIR)/
+	cp web/index.html $(DOCS_DIR)/index.html
+	touch $(DOCS_DIR)/.nojekyll
+	@echo "Staged in $(DOCS_DIR)/ -- commit it, then enable Pages (Settings > Pages > Deploy from a branch > main / docs)"
 
 clean:
 	cargo clean
