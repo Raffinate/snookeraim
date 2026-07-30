@@ -390,6 +390,27 @@ const PINCH_ZOOM_SENSITIVITY: f32 = 0.004; // per pixel of change in two-finger 
 const CAMERA_ELEVATION_DEG: f32 = 15.0; // above the cue ball, as seen when aiming
 const CAMERA_BACK_DISTANCE: f32 = 0.7; // behind the cue ball, away from the object ball
 
+// Camera presets (1/2/3): quick jumps to fixed vantage points, distinct
+// from free orbiting. 1 and 2 stay in aiming mode and only change stance
+// relative to the cue ball, preserving whatever direction is currently
+// aimed (see `apply_aim_stance`); 3 switches to view mode and looks down
+// the potting line itself, so it deliberately ignores the current aim.
+const CAMERA_CLOSE_BACK_DISTANCE: f32 = 0.42; // preset 1: right above/close behind the cue ball
+const CAMERA_CLOSE_ELEVATION_DEG: f32 = 12.0;
+const CAMERA_STANCE_BACK_DISTANCE: f32 = 1.1; // preset 2: standing back, sizing up the shot
+const CAMERA_STANCE_ELEVATION_DEG: f32 = 30.0;
+const CAMERA_STANCE_LATERAL_OFFSET: f32 = 0.28; // shifted left of the aim line
+// Preset 3 stands well back from the *object* ball rather than the cue
+// ball -- reusing preset 2's distance still read as too close, likely
+// because the object ball sits close to cushions/pockets far more often
+// than the cue ball does, so this needs more clearance to actually read
+// as "standing back", not just matching preset 2's number. It reuses
+// preset 2's *height* though (see `pot_line_camera`), not its elevation
+// angle -- height = distance * tan(angle), so pairing a bigger distance
+// with the same angle would scale height up too and give a "giant"
+// vantage instead of the same person standing further away.
+const CAMERA_POT_LINE_BACK_DISTANCE: f32 = 1.7;
+
 const ROTATE_SENSITIVITY: f32 = 0.005; // radians per pixel, at ROTATE_REFERENCE_DISTANCE
 const ROTATE_REFERENCE_DISTANCE: f32 = 1.5; // meters
 const ROTATE_MIN_DIST: f32 = 0.3;
@@ -1119,6 +1140,67 @@ fn aiming_camera(cue_ball_pos: Vector3, object_ball_pos: Vector3) -> Camera3D {
     Camera3D::perspective(position, cue_ball_pos, Vector3::new(0.0, 1.0, 0.0), 45.0)
 }
 
+/// Repositions `camera` into a fixed "sighting stance" relative to the cue
+/// ball, without touching where it's currently aimed: the camera's existing
+/// horizontal bearing (`shot_direction_xz`) is kept and only the distance
+/// behind the ball, elevation, and sideways offset change. The lateral
+/// offset shifts *both* position and target together (the same trick
+/// panning uses) rather than sliding position sideways while target stays
+/// pinned to the ball -- pinning the target would rotate the
+/// position-to-target vector itself, which is exactly the aim direction,
+/// so standing "to the side" would silently re-aim the shot. Falls back to
+/// looking toward the object ball when the camera has no defined bearing
+/// yet (looking straight up/down). Used by camera presets 1 and 2.
+fn apply_aim_stance(
+    camera: &mut Camera3D,
+    cue_ball_pos: Vector3,
+    object_ball_pos: Vector3,
+    back_distance: f32,
+    elevation_deg: f32,
+    lateral_offset: f32,
+) {
+    let (fx, fz) = shot_direction_xz(*camera).unwrap_or_else(|| {
+        let dx = object_ball_pos.x - cue_ball_pos.x;
+        let dz = object_ball_pos.z - cue_ball_pos.z;
+        let len = (dx * dx + dz * dz).sqrt().max(1e-4);
+        (dx / len, dz / len)
+    });
+    let (lx, lz) = (fz, -fx); // left of the forward direction, in the table plane
+
+    let pivot = Vector3::new(
+        cue_ball_pos.x + lx * lateral_offset,
+        cue_ball_pos.y,
+        cue_ball_pos.z + lz * lateral_offset,
+    );
+    let height = pivot.y + back_distance * elevation_deg.to_radians().tan();
+    camera.position = Vector3::new(pivot.x - fx * back_distance, height, pivot.z - fz * back_distance);
+    camera.target = pivot;
+}
+
+/// Camera preset 3: stands at the object ball, on the line away from the
+/// target pocket, and looks straight down that line toward the pocket --
+/// the vantage a player uses to check a potting angle by eye. Unlike
+/// `apply_aim_stance` this ignores the current aim entirely, since the
+/// point is to sight a specific, fixed line. Stands at the same eye
+/// height as preset 2's standing stance -- only the back distance is
+/// bigger, so this reads as the same person standing further away, not
+/// someone taller looking down at a steeper angle.
+fn pot_line_camera(object_ball_pos: Vector3, pocket_pos: Vector3) -> Camera3D {
+    let dx = object_ball_pos.x - pocket_pos.x;
+    let dz = object_ball_pos.z - pocket_pos.z;
+    let len = (dx * dx + dz * dz).sqrt().max(1e-4);
+    let (bx, bz) = (dx / len, dz / len); // pocket -> object ball, i.e. "behind", away from the pocket
+
+    let height = object_ball_pos.y
+        + CAMERA_STANCE_BACK_DISTANCE * CAMERA_STANCE_ELEVATION_DEG.to_radians().tan();
+    let position = Vector3::new(
+        object_ball_pos.x + bx * CAMERA_POT_LINE_BACK_DISTANCE,
+        height,
+        object_ball_pos.z + bz * CAMERA_POT_LINE_BACK_DISTANCE,
+    );
+    Camera3D::perspective(position, pocket_pos, Vector3::new(0.0, 1.0, 0.0), 45.0)
+}
+
 /// Where a screen-space ray through `screen_pos` meets the table plane
 /// (y = 0), if it does so in front of the camera. `None` when it points
 /// away from the table entirely (e.g. up toward the sky).
@@ -1240,6 +1322,9 @@ struct TouchUi {
     // hit-tested, no space reserved for them.
     ghost: Option<Btn>,
     aim: Option<Btn>,
+    close_stance: Btn,
+    stand_stance: Btn,
+    pot_line: Btn,
     expand_toggle: Btn,
     view: Btn,
     center: Btn,
@@ -1267,6 +1352,9 @@ impl TouchUi {
             &self.view,
             &self.center,
             &self.help,
+            &self.close_stance,
+            &self.stand_stance,
+            &self.pot_line,
         ]
         .iter()
         .any(|b| b.hit(mouse))
@@ -1293,8 +1381,14 @@ fn touch_ui(
     let bl_w_base = 6 * BTN_BASE + 5 * BTN_GAP_BASE;
     let hit_w_base = 3 * BTN_BASE + 2 * BTN_GAP_BASE;
     let top_h_base = 3 * BTN_BASE + 2 * BTN_GAP_BASE;
+    // Bottom-left is now 4 rows tall: the preset row, LOOK, and the two
+    // D-pad rows. height_scale needs the taller of the two corners' column
+    // heights, not just the top-right one, or a tall bottom-left cluster
+    // could overflow a short screen unnoticed.
+    let bl_h_base = 4 * BTN_BASE + 3 * BTN_GAP_BASE;
     let width_scale = (screen_w - 3 * BTN_MARGIN_BASE) as f32 / (bl_w_base + hit_w_base) as f32;
-    let height_scale = (screen_h - 3 * BTN_MARGIN_BASE) as f32 / (top_h_base + hit_w_base) as f32;
+    let height_scale =
+        (screen_h - 3 * BTN_MARGIN_BASE) as f32 / (top_h_base.max(bl_h_base) + hit_w_base) as f32;
     let scale = width_scale.min(height_scale).min(1.0).max(UI_MIN_SCALE);
 
     let btn = (BTN_BASE as f32 * scale).round() as i32;
@@ -1327,6 +1421,15 @@ fn touch_ui(
 
     let look_w = (center_x + center_w) - grid_x;
     let view = Btn::new(grid_x, look_y, look_w, btn, "LOOK", font);
+
+    // Camera presets, one row directly above LOOK, same combined width --
+    // grouped with the rest of the camera cluster since that's what they
+    // are, rather than tucked away behind the top-right expand toggle.
+    let preset_y = look_y - step;
+    let preset_w = (look_w - 2 * gap) / 3;
+    let close_stance = Btn::new(grid_x, preset_y, preset_w, btn, "CLOSE", font);
+    let stand_stance = Btn::new(grid_x + preset_w + gap, preset_y, preset_w, btn, "STAND", font);
+    let pot_line = Btn::new(grid_x + 2 * (preset_w + gap), preset_y, preset_w, btn, "LINE", font);
 
     // Bottom-right: HIT stands alone, mirroring the Space hotkey -- a big
     // 3x3 square, since it's the main "do the thing" action.
@@ -1379,6 +1482,9 @@ fn touch_ui(
         test,
         ghost,
         aim,
+        close_stance,
+        stand_stance,
+        pot_line,
         expand_toggle,
         view,
         center,
@@ -1578,6 +1684,61 @@ fn main() {
             }
             if rl.is_key_pressed(KeyboardKey::KEY_H) || (tap && opt_hit(&ui.aim, mouse)) {
                 show_aim_line = !show_aim_line;
+            }
+
+            // Camera presets 1/2/3. 1 and 2 are aiming-mode stances -- if
+            // view mode is active they first exit it exactly like pressing
+            // V would (so re-entering view mode later still resumes the
+            // free-roam camera the player was inspecting from), then
+            // reposition the aim camera without touching its bearing. 3 is
+            // a view-mode preset -- it enters view mode like V would (so
+            // the current aim gets frozen for the cue), then overrides the
+            // resulting camera with the fixed potting-line vantage.
+            let close_pressed = rl.is_key_pressed(KeyboardKey::KEY_ONE) || (tap && ui.close_stance.hit(mouse));
+            let stand_pressed = rl.is_key_pressed(KeyboardKey::KEY_TWO) || (tap && ui.stand_stance.hit(mouse));
+            let pot_line_pressed = rl.is_key_pressed(KeyboardKey::KEY_THREE) || (tap && ui.pot_line.hit(mouse));
+
+            if close_pressed || stand_pressed {
+                if view_mode {
+                    last_view_camera = Some(camera);
+                    if let Some(saved) = saved_camera.take() {
+                        camera = saved;
+                    }
+                    view_mode = false;
+                }
+                if close_pressed {
+                    apply_aim_stance(
+                        &mut camera,
+                        cue_ball_pos,
+                        object_ball_pos,
+                        CAMERA_CLOSE_BACK_DISTANCE,
+                        CAMERA_CLOSE_ELEVATION_DEG,
+                        0.0,
+                    );
+                } else {
+                    apply_aim_stance(
+                        &mut camera,
+                        cue_ball_pos,
+                        object_ball_pos,
+                        CAMERA_STANCE_BACK_DISTANCE,
+                        CAMERA_STANCE_ELEVATION_DEG,
+                        CAMERA_STANCE_LATERAL_OFFSET,
+                    );
+                }
+            }
+
+            if pot_line_pressed {
+                if !view_mode {
+                    if last_view_camera.is_none() {
+                        let offset = cue_ball_pos - camera.target;
+                        camera.target = cue_ball_pos;
+                        camera.position = camera.position + offset;
+                    }
+                    frozen_aim_camera = camera;
+                    saved_camera = Some(camera);
+                    view_mode = true;
+                }
+                camera = pot_line_camera(object_ball_pos, pockets[target_pocket.0].position);
             }
         }
 
@@ -1880,6 +2041,9 @@ fn main() {
         if let Some(b) = &ui.aim {
             b.draw(&mut d, mouse, show_aim_line);
         }
+        ui.close_stance.draw(&mut d, mouse, false);
+        ui.stand_stance.draw(&mut d, mouse, false);
+        ui.pot_line.draw(&mut d, mouse, false);
         ui.expand_toggle.draw(&mut d, mouse, false);
         ui.view.draw(&mut d, mouse, view_mode);
         ui.center.draw(&mut d, mouse, false);
@@ -1898,6 +2062,9 @@ fn main() {
                 "Q / E            rotate (yaw) the camera",
                 "C / CENTER       re-center the orbit pivot on the cue ball",
                 "V / LOOK         toggle view mode (inspect freely, aim stays frozen)",
+                "1 / CLOSE        aim stance: right above and close to the cue ball",
+                "2 / STAND        aim stance: standing back and to the left of the cue",
+                "3 / LINE         view mode: sight the potting line, object ball to pocket",
                 "G / GHOST        toggle the ghost cue ball",
                 "H / AIM          toggle the object-ball aim line (needs ghost ball on)",
                 ">> / <<          show or hide the GHOST/AIM buttons",

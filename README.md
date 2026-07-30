@@ -29,6 +29,9 @@ top-right) render on every platform, not just touch devices.
 | `Q`/`E` | `Q`/`E` | Rotate (yaw) the camera at a fixed speed |
 | `C` | `CENTER` | Re-center the orbit pivot on the cue ball (keeps zoom/angle) |
 | `V` | `LOOK` | Toggle view mode (see below) |
+| `1` | `CLOSE` | Aim-mode camera preset: right above and close behind the cue ball |
+| `2` | `STAND` | Aim-mode camera preset: standing back and to the left of the cue |
+| `3` | `LINE` | View-mode camera preset: sights the potting line, object ball to pocket |
 | `G` | `GHOST` | Toggle the ghost cue ball |
 | `H` | `AIM` | Toggle the object-ball aim line (only while the ghost ball is shown) |
 | `Space` | `HIT` | Test the current aim: trace both balls' paths, evaluate the pot |
