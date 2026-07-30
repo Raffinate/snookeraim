@@ -316,12 +316,17 @@ const PATH_WHITE_COLOR: Color = Color::new(255, 255, 255, 110);
 const PATH_RED_COLOR: Color = Color::new(230, 60, 60, 110);
 
 // On-screen touch controls + help popup: sized for fingers, not just
-// mouse pointers, and laid out from the current screen size each frame
-// so they hold up across window resizes and phone aspect ratios.
-const BTN: i32 = 52; // button edge length, px
-const BTN_GAP: i32 = 8;
-const BTN_MARGIN: i32 = 14;
-const BTN_FONT: i32 = 16;
+// mouse pointers, and laid out from the current screen size each frame so
+// they hold up across window resizes and phone aspect ratios. These are
+// the *base* (desktop-scale) sizes; `touch_ui` scales them down together
+// -- down to `UI_MIN_SCALE` -- so the whole control set still fits (and
+// doesn't overlap itself) on small phone screens.
+const BTN_BASE: i32 = 52; // button edge length, px, at scale 1.0
+const BTN_GAP_BASE: i32 = 8;
+const BTN_MARGIN_BASE: i32 = 14;
+const BTN_FONT_BASE: i32 = 16;
+const BTN_FONT_MIN: i32 = 10;
+const UI_MIN_SCALE: f32 = 0.55;
 const BTN_FILL: Color = Color::new(255, 255, 255, 40);
 const BTN_FILL_ACTIVE: Color = Color::new(255, 220, 40, 90);
 const BTN_BORDER: Color = Color::new(255, 255, 255, 160);
@@ -873,11 +878,12 @@ struct Btn {
     w: i32,
     h: i32,
     label: &'static str,
+    font: i32,
 }
 
 impl Btn {
-    fn new(x: i32, y: i32, w: i32, h: i32, label: &'static str) -> Self {
-        Btn { x, y, w, h, label }
+    fn new(x: i32, y: i32, w: i32, h: i32, label: &'static str, font: i32) -> Self {
+        Btn { x, y, w, h, label, font }
     }
 
     fn hit(&self, mouse: Vector2) -> bool {
@@ -895,12 +901,12 @@ impl Btn {
         };
         d.draw_rectangle(self.x, self.y, self.w, self.h, fill);
         d.draw_rectangle_lines(self.x, self.y, self.w, self.h, BTN_BORDER);
-        let text_w = d.measure_text(self.label, BTN_FONT);
+        let text_w = d.measure_text(self.label, self.font);
         d.draw_text(
             self.label,
             self.x + (self.w - text_w) / 2,
-            self.y + (self.h - BTN_FONT) / 2,
-            BTN_FONT,
+            self.y + (self.h - self.font) / 2,
+            self.font,
             BTN_TEXT,
         );
     }
@@ -967,42 +973,63 @@ fn touch_ui(
     reset_label: &'static str,
     ghost_aim_visible: bool,
 ) -> TouchUi {
-    let step = BTN + BTN_GAP;
+    // Scale the whole control set down together so it always fits the
+    // current screen without overlapping itself, with a floor so buttons
+    // never shrink below tappable. The bottom-left camera cluster and the
+    // bottom-right HIT square are the two widest bottom-anchored things
+    // (each `6*BTN+5*GAP` / `3*BTN+2*GAP` wide); the top-right column and
+    // that same HIT square are the two tallest. Solving for the scale that
+    // keeps each pair's combined footprint within the screen (with a
+    // little slack for margins) gives a hard upper bound; below that we
+    // just use the screen as-is.
+    let bl_w_base = 6 * BTN_BASE + 5 * BTN_GAP_BASE;
+    let hit_w_base = 3 * BTN_BASE + 2 * BTN_GAP_BASE;
+    let top_h_base = 3 * BTN_BASE + 2 * BTN_GAP_BASE;
+    let width_scale = (screen_w - 3 * BTN_MARGIN_BASE) as f32 / (bl_w_base + hit_w_base) as f32;
+    let height_scale = (screen_h - 3 * BTN_MARGIN_BASE) as f32 / (top_h_base + hit_w_base) as f32;
+    let scale = width_scale.min(height_scale).min(1.0).max(UI_MIN_SCALE);
+
+    let btn = (BTN_BASE as f32 * scale).round() as i32;
+    let gap = ((BTN_GAP_BASE as f32 * scale).round() as i32).max(2);
+    let margin = (BTN_MARGIN_BASE as f32 * scale).round() as i32;
+    let font = ((BTN_FONT_BASE as f32 * scale).round() as i32).max(BTN_FONT_MIN);
+    let step = btn + gap;
 
     // Bottom-left: a 4x2 grid (Q ^ E + / < v > -), a square 2x2 CENTER
     // button to its right, and a LOOK header bar spanning both on top.
-    let grid_x = BTN_MARGIN;
-    let row_bottom_y = screen_h - BTN_MARGIN - BTN;
+    let grid_x = margin;
+    let row_bottom_y = screen_h - margin - btn;
     let row_top_y = row_bottom_y - step;
     let look_y = row_top_y - step;
     let col_x = |col: i32| grid_x + col * step;
 
-    let rot_left = Btn::new(col_x(0), row_top_y, BTN, BTN, "Q");
-    let pan_up = Btn::new(col_x(1), row_top_y, BTN, BTN, "^");
-    let rot_right = Btn::new(col_x(2), row_top_y, BTN, BTN, "E");
-    let zoom_in = Btn::new(col_x(3), row_top_y, BTN, BTN, "+");
+    let rot_left = Btn::new(col_x(0), row_top_y, btn, btn, "Q", font);
+    let pan_up = Btn::new(col_x(1), row_top_y, btn, btn, "^", font);
+    let rot_right = Btn::new(col_x(2), row_top_y, btn, btn, "E", font);
+    let zoom_in = Btn::new(col_x(3), row_top_y, btn, btn, "+", font);
 
-    let pan_left = Btn::new(col_x(0), row_bottom_y, BTN, BTN, "<");
-    let pan_down = Btn::new(col_x(1), row_bottom_y, BTN, BTN, "v");
-    let pan_right = Btn::new(col_x(2), row_bottom_y, BTN, BTN, ">");
-    let zoom_out = Btn::new(col_x(3), row_bottom_y, BTN, BTN, "-");
+    let pan_left = Btn::new(col_x(0), row_bottom_y, btn, btn, "<", font);
+    let pan_down = Btn::new(col_x(1), row_bottom_y, btn, btn, "v", font);
+    let pan_right = Btn::new(col_x(2), row_bottom_y, btn, btn, ">", font);
+    let zoom_out = Btn::new(col_x(3), row_bottom_y, btn, btn, "-", font);
 
-    let center_w = 2 * BTN + BTN_GAP;
+    let center_w = 2 * btn + gap;
     let center_x = col_x(3) + step;
-    let center = Btn::new(center_x, row_top_y, center_w, center_w, "CENTER");
+    let center = Btn::new(center_x, row_top_y, center_w, center_w, "CENTER", font);
 
     let look_w = (center_x + center_w) - grid_x;
-    let view = Btn::new(grid_x, look_y, look_w, BTN, "LOOK");
+    let view = Btn::new(grid_x, look_y, look_w, btn, "LOOK", font);
 
     // Bottom-right: HIT stands alone, mirroring the Space hotkey -- a big
     // 3x3 square, since it's the main "do the thing" action.
-    let hit_w = 3 * BTN + 2 * BTN_GAP;
+    let hit_w = 3 * btn + 2 * gap;
     let test = Btn::new(
-        screen_w - BTN_MARGIN - hit_w,
-        screen_h - BTN_MARGIN - hit_w,
+        screen_w - margin - hit_w,
+        screen_h - margin - hit_w,
         hit_w,
         hit_w,
         "HIT",
+        font,
     );
 
     // Top-right: help, with an expand/collapse toggle directly below it.
@@ -1010,21 +1037,22 @@ fn touch_ui(
     // label has room to breathe, and its label reflects what pressing it
     // will actually do right now. Ghost/Aim stack below reset, sharing its
     // width, but only exist (and only take up space) while expanded.
-    let help = Btn::new(screen_w - BTN_MARGIN - BTN, BTN_MARGIN, BTN, BTN, "?");
+    let help = Btn::new(screen_w - margin - btn, margin, btn, btn, "?", font);
     let expand_toggle = Btn::new(
         help.x,
-        BTN_MARGIN + step,
-        BTN,
-        BTN,
+        margin + step,
+        btn,
+        btn,
         if ghost_aim_visible { ">>" } else { "<<" },
+        font,
     );
-    let reset_w = 2 * BTN + BTN_GAP;
-    let reset_x = help.x - BTN_GAP - reset_w;
-    let reset = Btn::new(reset_x, BTN_MARGIN, reset_w, BTN, reset_label);
+    let reset_w = 2 * btn + gap;
+    let reset_x = help.x - gap - reset_w;
+    let reset = Btn::new(reset_x, margin, reset_w, btn, reset_label, font);
     let (ghost, aim) = if ghost_aim_visible {
         (
-            Some(Btn::new(reset_x, BTN_MARGIN + step, reset_w, BTN, "GHOST")),
-            Some(Btn::new(reset_x, BTN_MARGIN + 2 * step, reset_w, BTN, "AIM")),
+            Some(Btn::new(reset_x, margin + step, reset_w, btn, "GHOST", font)),
+            Some(Btn::new(reset_x, margin + 2 * step, reset_w, btn, "AIM", font)),
         )
     } else {
         (None, None)
