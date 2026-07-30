@@ -1630,17 +1630,22 @@ fn main() {
             draw_light_fixture(&mut d3, &light_panels);
 
             if USE_MODEL_PROPS {
+                // raylib always reserves materials()[0] for its own
+                // auto-inserted default material (a blank white texture) and
+                // appends the glTF file's real materials starting at index 1
+                // -- balls.glb has exactly one ("Balls"), so index 1 is it.
+                let balls_material = &balls_model.materials()[1];
                 let cue_ball_offset = cue_ball_pos - CUE_BALL_MODEL_CENTER;
                 d3.draw_mesh(
                     &balls_model.meshes()[CUE_BALL_MESH_INDEX],
-                    weak_copy(&balls_model.materials()[0]),
+                    weak_copy(balls_material),
                     Matrix::translate(cue_ball_offset.x, cue_ball_offset.y, cue_ball_offset.z),
                 );
 
                 let red_ball_offset = object_ball_pos - RED_BALL_MODEL_CENTER;
                 d3.draw_mesh(
                     &balls_model.meshes()[RED_BALL_MESH_INDEX],
-                    weak_copy(&balls_model.materials()[0]),
+                    weak_copy(balls_material),
                     Matrix::translate(red_ball_offset.x, red_ball_offset.y, red_ball_offset.z),
                 );
             } else {
