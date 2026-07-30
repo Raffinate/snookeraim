@@ -294,6 +294,21 @@ const PATH_HEIGHT: f32 = 0.0015; // path stripes sit just above the cloth
 const CLOTH_COLOR: Color = Color::new(20, 110, 60, 255);
 const CUSHION_COLOR: Color = Color::new(15, 80, 45, 255);
 const POCKET_COLOR: Color = Color::BLACK;
+
+// Loaded table model (assets/snooker_table.glb, stripped of balls/lamp/cues
+// by scripts/strip_table_model.py -- see that script for provenance and
+// licensing). Set to `false` as an escape hatch back to the procedural
+// table below, in case the model's alignment needs adjusting.
+const USE_TABLE_MODEL: bool = true;
+const TABLE_MODEL_PATH: &str = "assets/snooker_table.glb";
+// Measured directly from the model's "Baize" (cloth) mesh bounding box:
+// the flat bed sits at local (X center 0.1, Z center -1.879, Y top
+// 0.8697), not at its own origin. This offset brings that point to our
+// world's table center / cloth height (0, 0, 0), matching where the
+// procedural table, balls, and gameplay math all assume the cloth is.
+const TABLE_MODEL_OFFSET_X: f32 = -0.1;
+const TABLE_MODEL_OFFSET_Y: f32 = -0.8697;
+const TABLE_MODEL_OFFSET_Z: f32 = 1.879;
 const CUE_BALL_COLOR: Color = Color::WHITE;
 const OBJECT_BALL_COLOR: Color = Color::new(200, 30, 30, 255); // red ball
 const CUE_COLOR: Color = Color::new(160, 110, 60, 255); // wood
@@ -1163,6 +1178,10 @@ fn main() {
     let mut ghost_material = rl.load_material_default(&thread);
     ghost_material.set_shader(&ghost_shader);
 
+    let table_model = rl
+        .load_model(&thread, TABLE_MODEL_PATH)
+        .expect("failed to load assets/snooker_table.glb");
+
     while !rl.window_should_close() {
         let mouse = rl.get_mouse_position();
         let screen_w = rl.get_screen_width();
@@ -1397,7 +1416,12 @@ fn main() {
 
         {
             let mut d3 = d.begin_mode3D(camera);
-            draw_table(&mut d3, &pockets);
+            if USE_TABLE_MODEL {
+                let offset = Vector3::new(TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z);
+                d3.draw_model(&table_model, offset, 1.0, Color::WHITE);
+            } else {
+                draw_table(&mut d3, &pockets);
+            }
             draw_light_fixture(&mut d3, &light_panels);
 
             ball_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, CUE_BALL_COLOR);
