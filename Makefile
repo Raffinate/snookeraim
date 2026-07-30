@@ -20,11 +20,15 @@ web:
 		exit 1; \
 	fi
 	PATH="$(EMSCRIPTEN_PREFIX)/bin:$$PATH" \
-	EMCC_CFLAGS="-O3 -sUSE_GLFW=3 -sASSERTIONS=1 -sWASM=1 -sASYNCIFY -sGL_ENABLE_GET_PROC_ADDRESS=1 -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2 -sFULL_ES3=1" \
+	EMCC_CFLAGS="-O3 -sUSE_GLFW=3 -sASSERTIONS=1 -sWASM=1 -sASYNCIFY -sGL_ENABLE_GET_PROC_ADDRESS=1 -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2 -sFULL_ES3=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 --preload-file $(CURDIR)/assets@assets" \
 	BINDGEN_EXTRA_CLANG_ARGS="-I$(EMSCRIPTEN_PREFIX)/libexec/cache/sysroot/include" \
 	cargo build --release --target wasm32-unknown-emscripten
+	@# --preload-file's sidecar .data file is a side effect of the link
+	@# step that cargo doesn't know to copy out of deps/ like it does the
+	@# .wasm/.js it recognizes as the crate's actual build artifacts.
+	@cp $(WEB_DIR)/deps/snookeraim.data $(WEB_DIR)/snookeraim.data
 	@cp web/index.html $(WEB_DIR)/index.html
-	@echo "Built: $(WEB_DIR)/snookeraim.{js,wasm}"
+	@echo "Built: $(WEB_DIR)/snookeraim.{js,wasm,data}"
 
 ## Build for web and serve it locally at http://localhost:8765
 serve: web
@@ -37,7 +41,7 @@ serve: web
 pages: web
 	rm -rf $(DOCS_DIR)
 	mkdir -p $(DOCS_DIR)
-	cp $(WEB_DIR)/snookeraim.js $(WEB_DIR)/snookeraim.wasm $(DOCS_DIR)/
+	cp $(WEB_DIR)/snookeraim.js $(WEB_DIR)/snookeraim.wasm $(WEB_DIR)/snookeraim.data $(DOCS_DIR)/
 	cp web/index.html $(DOCS_DIR)/index.html
 	touch $(DOCS_DIR)/.nojekyll
 	@echo "Staged in $(DOCS_DIR)/ -- commit it, then enable Pages (Settings > Pages > Deploy from a branch > main / docs)"
