@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Snooker Aim Trainer</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #1e1e1e; }
+    canvas { display: block; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" width="1280" height="800" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+    };
+  </script>
+  <script src="snookeraim.js"></script>
+</body>
+</html>

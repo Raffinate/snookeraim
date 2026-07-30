@@ -1,5 +1,13 @@
 use raylib::prelude::*;
 
+// Desktop targets compile against desktop OpenGL 3.3 core (GLSL 330); the
+// Emscripten/web target negotiates a WebGL2 context (GLSL ES 300, requested
+// via the opengl_es_30 feature — see Cargo.toml). The two dialects are close
+// enough (both use in/out and an explicit output var) that only the version
+// line and a precision qualifier differ; desktop GLSL doesn't need the
+// qualifier but WebGL2's compiler requires it in fragment shaders.
+
+#[cfg(not(target_os = "emscripten"))]
 const BALL_VS: &str = r#"
 #version 330
 
@@ -27,8 +35,85 @@ void main()
 }
 "#;
 
+#[cfg(target_os = "emscripten")]
+const BALL_VS: &str = r#"#version 300 es
+precision mediump float;
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+
+uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
+
+out vec3 fragPosition;
+out vec2 fragTexCoord;
+out vec4 fragColor;
+out vec3 fragNormal;
+
+void main()
+{
+    fragPosition = vec3(matModel * vec4(vertexPosition, 1.0));
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+    fragNormal = normalize(vec3(matNormal * vec4(vertexNormal, 1.0)));
+    gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+"#;
+
+#[cfg(not(target_os = "emscripten"))]
 const BALL_FS: &str = r#"
 #version 330
+
+in vec3 fragPosition;
+in vec2 fragTexCoord;
+in vec4 fragColor;
+in vec3 fragNormal;
+
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+#define NUM_LIGHTS 3
+uniform vec3 lightPos[NUM_LIGHTS];
+uniform vec4 lightColor[NUM_LIGHTS];
+
+out vec4 finalColor;
+
+void main()
+{
+    vec4 texelColor = texture(texture0, fragTexCoord);
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+
+    vec3 lightDot = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < NUM_LIGHTS; i++)
+    {
+        vec3 lightDir = normalize(lightPos[i] - fragPosition);
+        float NdotL = max(dot(normal, lightDir), 0.0);
+        lightDot += lightColor[i].rgb * NdotL;
+
+        float specCo = 0.0;
+        if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-lightDir, normal))), 24.0);
+        specular += specCo * lightColor[i].rgb;
+    }
+
+    vec4 tint = colDiffuse * fragColor;
+
+    finalColor = texelColor * ((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0));
+    finalColor += texelColor * (ambient / 10.0) * tint;
+    finalColor = pow(finalColor, vec4(1.0 / 2.2));
+}
+"#;
+
+#[cfg(target_os = "emscripten")]
+const BALL_FS: &str = r#"#version 300 es
+precision mediump float;
 
 in vec3 fragPosition;
 in vec2 fragTexCoord;
@@ -79,8 +164,51 @@ void main()
 // with alpha taken directly from colDiffuse.a instead of the ball
 // shader's formula, which pushes alpha above 1 via its specular/ambient
 // terms and so can't be used for anything translucent.
+
+#[cfg(not(target_os = "emscripten"))]
 const GHOST_FS: &str = r#"
 #version 330
+
+in vec3 fragPosition;
+in vec3 fragNormal;
+
+uniform vec4 colDiffuse;
+uniform vec4 ambient;
+uniform vec3 viewPos;
+
+#define NUM_LIGHTS 3
+uniform vec3 lightPos[NUM_LIGHTS];
+uniform vec4 lightColor[NUM_LIGHTS];
+
+out vec4 finalColor;
+
+void main()
+{
+    vec3 normal = normalize(fragNormal);
+    vec3 viewD = normalize(viewPos - fragPosition);
+
+    vec3 lightDot = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
+    for (int i = 0; i < NUM_LIGHTS; i++)
+    {
+        vec3 lightDir = normalize(lightPos[i] - fragPosition);
+        float NdotL = max(dot(normal, lightDir), 0.0);
+        lightDot += lightColor[i].rgb * NdotL;
+
+        float specCo = 0.0;
+        if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-lightDir, normal))), 24.0);
+        specular += specCo * lightColor[i].rgb;
+    }
+
+    vec3 shaded = colDiffuse.rgb * (ambient.rgb + lightDot) + specular;
+    finalColor = vec4(shaded, colDiffuse.a);
+}
+"#;
+
+#[cfg(target_os = "emscripten")]
+const GHOST_FS: &str = r#"#version 300 es
+precision mediump float;
 
 in vec3 fragPosition;
 in vec3 fragNormal;

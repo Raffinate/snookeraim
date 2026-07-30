@@ -21,6 +21,7 @@ pipeline.
 | Drag (left mouse) | Orbit the camera |
 | Scroll wheel | Zoom toward/away from the point under the cursor |
 | `W`/`A`/`S`/`D` or arrows | Pan the camera (position + target together) |
+| `Q`/`E` | Rotate (yaw) the camera at a fixed speed |
 | `C` | Re-center the orbit pivot on the cue ball (keeps zoom/angle) |
 | `V` | Toggle view mode (see below) |
 | `G` | Toggle the ghost cue ball |
@@ -38,13 +39,15 @@ is ~1.45m long and always renders along the camera-to-ball line (see
 below), so the camera has to sit far enough back to avoid ending up inside
 the cue's own geometry.
 
-**The cue always points at the camera.** Rather than tracking a fixed
-"shot direction" variable, the cue's azimuth is derived each frame from
-the camera's horizontal bearing around the cue ball — orbit around the
-ball and the cue swings to stay aimed however you're currently looking at
-it. It ignores the camera's *pitch*, though: it stays near-horizontal,
-raised by a fixed small angle from tip to butt, so looking down from
-above doesn't tilt it into the table.
+**The cue follows the camera's look direction, not its position.** The
+cue's azimuth is derived each frame from the camera's horizontal forward
+vector (`target − position`), not from where the camera happens to be
+relative to the ball — so orbiting (which rotates that forward vector)
+swings the cue, but panning with `W`/`A`/`S`/`D` (which translates
+position and target together, preserving the vector between them) doesn't
+disturb the aim. It ignores the camera's *pitch*: the cue stays
+near-horizontal, raised by a fixed small angle from tip to butt, so
+looking down from above doesn't tilt it into the table.
 
 **Ghost ball, aim line, and the potting "gate" are pure geometry, no
 physics.** Three related aids, all computed as straight-line raycasts in
@@ -105,6 +108,54 @@ all). The overhead light is modeled as three segmented rectangular panels
 along the table's length — matching the look of a real snooker table's
 LED light bank — each also acting as a point light in the shader, rather
 than a single point light.
+
+## Building for the web (WebAssembly)
+
+The desktop build (`cargo run`) is the primary target. There's also a
+working web build via Emscripten, running in the browser over WebGL2.
+
+**Prerequisites** (one-time setup):
+```sh
+brew install emscripten
+rustup target add wasm32-unknown-emscripten
+```
+
+**Build and serve locally:**
+```sh
+make serve   # builds for web and serves it at http://localhost:8765
+# or just:
+make web     # builds only, output in target/wasm32-unknown-emscripten/release/
+make run     # native desktop build, for comparison
+```
+
+A couple of things had to be worked around to make this build actually
+work, worth knowing about if it breaks again on a raylib/raylib-sys
+upgrade:
+
+- **`vendor/raylib-sys-6.0.0/`** is a locally patched copy of the
+  `raylib-sys` crate, wired in via a `[patch.crates-io]` entry in
+  `Cargo.toml`. Its `opengl_es_30` Cargo feature (needed to get
+  WebGL2/GLSL ES 3.00 instead of the older WebGL1/ES 2.00) unconditionally
+  links `-lGLESv2 -lGLdispatch` — real system libraries on native Linux/
+  Raspberry Pi GLES targets, but raylib's own official Makefile links
+  neither of them for `PLATFORM_WEB` (Emscripten provides its own GL
+  implementation internally), so those two link flags just don't exist for
+  this target and broke the build. The patch skips them specifically when
+  `TARGET` contains `emscripten`; nothing else about `raylib-sys` was
+  touched, and the native desktop build is unaffected (it never enables
+  this feature — see `Cargo.toml`'s target-specific `[dependencies]`).
+- **Two dialects of the three custom shaders** (`BALL_VS`/`BALL_FS`/
+  `GHOST_FS` in `main.rs`), picked via `cfg(target_os = "emscripten")`.
+  Desktop compiles against desktop OpenGL 3.3 core (GLSL 330); the browser
+  gets GLSL ES 3.00 instead (`#version 300 es` + a `precision` qualifier —
+  WebGL's compiler is stricter here than desktop's, e.g. it also requires
+  `#version` to be the literal first line of the source, no leading blank
+  line). The two dialects are close enough (both use `in`/`out` and an
+  explicit output variable) that only the preamble differs, not the shader
+  logic itself.
+- **`web/index.html`** is a minimal page (canvas + script tag) that `make
+  web` copies alongside the build output — Cargo's Emscripten target only
+  produces the `.js`/`.wasm` files, not a host page.
 
 ## Limitations
 
