@@ -424,6 +424,32 @@ const TABLE_MODEL_PATH: &str = "assets/snooker_table.glb";
 const TABLE_MODEL_OFFSET_X: f32 = -0.1;
 const TABLE_MODEL_OFFSET_Y: f32 = -0.8697;
 const TABLE_MODEL_OFFSET_Z: f32 = 1.879;
+
+// Real cue and ball meshes/textures, extracted from the same source model
+// by scripts/extract_props.py (see that script for how/why).
+const USE_MODEL_PROPS: bool = true;
+
+// cue.glb: a single continuous mesh (1.486m, matching a real cue), rebaked
+// by scripts/extract_props.py's flatten_root into a local frame with no
+// leftover display-rack rotation -- long axis along local +X. Confirmed
+// by sampling actual vertex radii along its length (not just the bounding
+// box) that it tapers from ~13mm at -X down to ~4mm at +X, i.e. +X is the
+// tip end, -X is the butt. Measured directly from the flattened file.
+const CUE_MODEL_PATH: &str = "assets/cue.glb";
+const CUE_MODEL_TIP_X: f32 = 0.71477;
+const CUE_MODEL_BUTT_X: f32 = -0.77121;
+
+// balls.glb: mesh indices and baked centers for the one cue-ball mesh and
+// one (of 15 identical) red-ball mesh we actually use, measured the same
+// way as the table's Baize offset. Node transforms were left untouched by
+// extract_props.py, so these centers come straight from the original
+// rack layout in the source file.
+const BALLS_MODEL_PATH: &str = "assets/balls.glb";
+const CUE_BALL_MESH_INDEX: usize = 5;
+const RED_BALL_MESH_INDEX: usize = 7;
+const CUE_BALL_MODEL_CENTER: Vector3 = Vector3 { x: 0.23129013, y: 0.89566159, z: -0.64475494 };
+const RED_BALL_MODEL_CENTER: Vector3 = Vector3 { x: 0.10001251, y: 0.89566159, z: -3.01039052 };
+
 const CUE_BALL_COLOR: Color = Color::WHITE;
 const OBJECT_BALL_COLOR: Color = Color::new(200, 30, 30, 255); // red ball
 const CUE_COLOR: Color = Color::new(160, 110, 60, 255); // wood
@@ -622,6 +648,43 @@ fn draw_cue(d: &mut impl RaylibDraw3D, shot_dir: (f32, f32), cue_ball_pos: Vecto
     let tip = cue_ball_pos + dir.scale(BALL_RADIUS + CUE_TIP_GAP);
     let butt = tip + dir.scale(CUE_LENGTH);
     d.draw_cylinder_ex(tip, butt, CUE_TIP_RADIUS, CUE_BUTT_RADIUS, 12, CUE_COLOR);
+}
+
+/// Same aim as `draw_cue`, but draws the real cue model instead of a
+/// plain cylinder. The model's own local +X axis is its tip-ward long
+/// axis (see CUE_MODEL_* comments), centered on the axis with no baked
+/// rotation left in it -- so orienting it is just "rotate local +X onto
+/// the world direction the tip should point", i.e. onto `-dir` (`dir`
+/// itself points tip -> butt, same convention as `draw_cue`).
+fn draw_cue_model(d: &mut impl RaylibDraw3D, model: &Model, shot_dir: (f32, f32), cue_ball_pos: Vector3) {
+    let (sx, sz) = shot_dir;
+    let elevation = CUE_ELEVATION_DEG.to_radians();
+    let horiz = elevation.cos();
+    let dir = Vector3::new(-sx * horiz, elevation.sin(), -sz * horiz);
+    let tip = cue_ball_pos + dir.scale(BALL_RADIUS + CUE_TIP_GAP);
+
+    // Stretch only along the cue's own length (local X); keep its natural
+    // radius, so scaling up to CUE_LENGTH doesn't also fatten it.
+    let scale_x = CUE_LENGTH / (CUE_MODEL_TIP_X - CUE_MODEL_BUTT_X);
+    let scale = Vector3::new(scale_x, 1.0, 1.0);
+
+    // Rotate local +X (tip-ward) onto -dir (dir is tip -> butt).
+    let target = Vector3::new(-dir.x, -dir.y, -dir.z);
+    let axis = Vector3::new(0.0, -target.z, target.y);
+    let axis = if axis.length() < 1e-5 {
+        Vector3::new(0.0, 1.0, 0.0)
+    } else {
+        axis.normalize()
+    };
+    let angle_deg = target.x.clamp(-1.0, 1.0).acos().to_degrees();
+
+    // The model's own local origin isn't the tip (tip sits at local X =
+    // CUE_MODEL_TIP_X), so `position` -- which places the local origin,
+    // not the tip -- has to be offset back from the desired tip point by
+    // however far the (scaled, rotated) tip sits from that origin.
+    let position = tip + dir.scale(CUE_MODEL_TIP_X * scale_x);
+
+    d.draw_model_ex(model, position, axis, angle_deg, scale, Color::WHITE);
 }
 
 /// Distance along a ray from `(x, z)` in direction `(dx, dz)` (need not be
@@ -1309,6 +1372,20 @@ fn main() {
         material.set_shader(&table_shader);
     }
 
+    let mut cue_model = rl
+        .load_model(&thread, CUE_MODEL_PATH)
+        .expect("failed to load assets/cue.glb");
+    for material in cue_model.materials_mut() {
+        material.set_shader(&table_shader);
+    }
+
+    let mut balls_model = rl
+        .load_model(&thread, BALLS_MODEL_PATH)
+        .expect("failed to load assets/balls.glb");
+    for material in balls_model.materials_mut() {
+        material.set_shader(&table_shader);
+    }
+
     while !rl.window_should_close() {
         let mouse = rl.get_mouse_position();
         let screen_w = rl.get_screen_width();
@@ -1552,22 +1629,42 @@ fn main() {
             }
             draw_light_fixture(&mut d3, &light_panels);
 
-            ball_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, CUE_BALL_COLOR);
-            d3.draw_mesh(
-                &ball_mesh,
-                weak_copy(&ball_material),
-                Matrix::translate(cue_ball_pos.x, cue_ball_pos.y, cue_ball_pos.z),
-            );
+            if USE_MODEL_PROPS {
+                let cue_ball_offset = cue_ball_pos - CUE_BALL_MODEL_CENTER;
+                d3.draw_mesh(
+                    &balls_model.meshes()[CUE_BALL_MESH_INDEX],
+                    weak_copy(&balls_model.materials()[0]),
+                    Matrix::translate(cue_ball_offset.x, cue_ball_offset.y, cue_ball_offset.z),
+                );
 
-            ball_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, OBJECT_BALL_COLOR);
-            d3.draw_mesh(
-                &ball_mesh,
-                weak_copy(&ball_material),
-                Matrix::translate(object_ball_pos.x, object_ball_pos.y, object_ball_pos.z),
-            );
+                let red_ball_offset = object_ball_pos - RED_BALL_MODEL_CENTER;
+                d3.draw_mesh(
+                    &balls_model.meshes()[RED_BALL_MESH_INDEX],
+                    weak_copy(&balls_model.materials()[0]),
+                    Matrix::translate(red_ball_offset.x, red_ball_offset.y, red_ball_offset.z),
+                );
+            } else {
+                ball_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, CUE_BALL_COLOR);
+                d3.draw_mesh(
+                    &ball_mesh,
+                    weak_copy(&ball_material),
+                    Matrix::translate(cue_ball_pos.x, cue_ball_pos.y, cue_ball_pos.z),
+                );
+
+                ball_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, OBJECT_BALL_COLOR);
+                d3.draw_mesh(
+                    &ball_mesh,
+                    weak_copy(&ball_material),
+                    Matrix::translate(object_ball_pos.x, object_ball_pos.y, object_ball_pos.z),
+                );
+            }
 
             if let Some(dir) = shot_dir {
-                draw_cue(&mut d3, dir, cue_ball_pos);
+                if USE_MODEL_PROPS {
+                    draw_cue_model(&mut d3, &cue_model, dir, cue_ball_pos);
+                } else {
+                    draw_cue(&mut d3, dir, cue_ball_pos);
+                }
 
                 if show_ghost_ball {
                     let raycast = cue_raycast(dir, cue_ball_pos, object_ball_pos);
