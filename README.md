@@ -16,18 +16,29 @@ pipeline.
 
 ## Controls
 
-| Input | Action |
-|---|---|
-| Drag (left mouse) | Orbit the camera |
-| Scroll wheel | Zoom toward/away from the point under the cursor |
-| `W`/`A`/`S`/`D` or arrows | Pan the camera (position + target together) |
-| `Q`/`E` | Rotate (yaw) the camera at a fixed speed |
-| `C` | Re-center the orbit pivot on the cue ball (keeps zoom/angle) |
-| `V` | Toggle view mode (see below) |
-| `G` | Toggle the ghost cue ball |
-| `H` | Toggle the object-ball aim line (only while the ghost ball is shown) |
-| `Space` | Test the current aim: trace both balls' paths, evaluate the pot |
-| `R` | Clear a tested shot's paths, or (if none showing) reposition both balls |
+Every action has both a keyboard hotkey and an on-screen button, so it
+works the same with a mouse or a finger. The on-screen controls (a
+pan/rotate/zoom cluster bottom-left, action buttons bottom-right, `?`
+top-right) render on every platform, not just touch devices.
+
+| Input | On-screen button | Action |
+|---|---|---|
+| Drag (left mouse) / D-pad | pan/rotate cluster | Orbit the camera |
+| Scroll wheel | `+`/`-` | Zoom toward the cursor (wheel) or the camera target (buttons) |
+| `W`/`A`/`S`/`D` or arrows | D-pad | Pan the camera (position + target together) |
+| `Q`/`E` | `Q`/`E` | Rotate (yaw) the camera at a fixed speed |
+| `C` | `CENTER` | Re-center the orbit pivot on the cue ball (keeps zoom/angle) |
+| `V` | `LOOK` | Toggle view mode (see below) |
+| `G` | `GHOST` | Toggle the ghost cue ball |
+| `H` | `AIM` | Toggle the object-ball aim line (only while the ghost ball is shown) |
+| `Space` | `HIT` | Test the current aim: trace both balls' paths, evaluate the pot |
+| `R` | `CLEAR` / `NEXT` | Clear a tested shot's paths, or (if none showing) reposition both balls |
+| `?` | `?` | Toggle a help popup listing all of the above |
+
+The window (and, on the web build, the browser canvas) is resizable —
+both the 3D view and the on-screen controls adapt to the current
+window/screen size every frame, so it works down to a phone-sized
+viewport.
 
 ## Features and design choices
 

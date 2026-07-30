@@ -263,6 +263,7 @@ const CUE_TIP_GAP: f32 = 0.004;
 const CUE_ELEVATION_DEG: f32 = 8.0;
 const PAN_SPEED: f32 = 1.2; // meters per second
 const KEY_ROTATE_SPEED_DEG: f32 = 90.0; // degrees per second, for Q/E
+const ZOOM_BUTTON_SPEED: f32 = 1.0; // meters per second, for the on-screen +/- buttons
 const CAMERA_ELEVATION_DEG: f32 = 15.0; // above the cue ball, as seen when aiming
 const CAMERA_BACK_DISTANCE: f32 = 0.7; // behind the cue ball, away from the object ball
 
@@ -313,6 +314,19 @@ const GATE_SUCCESS_COLOR: Color = Color::new(50, 220, 60, 255);
 const GATE_MISS_COLOR: Color = Color::new(220, 50, 50, 255);
 const PATH_WHITE_COLOR: Color = Color::new(255, 255, 255, 110);
 const PATH_RED_COLOR: Color = Color::new(230, 60, 60, 110);
+
+// On-screen touch controls + help popup: sized for fingers, not just
+// mouse pointers, and laid out from the current screen size each frame
+// so they hold up across window resizes and phone aspect ratios.
+const BTN: i32 = 52; // button edge length, px
+const BTN_GAP: i32 = 8;
+const BTN_MARGIN: i32 = 14;
+const BTN_FONT: i32 = 16;
+const BTN_FILL: Color = Color::new(255, 255, 255, 40);
+const BTN_FILL_ACTIVE: Color = Color::new(255, 220, 40, 90);
+const BTN_BORDER: Color = Color::new(255, 255, 255, 160);
+const BTN_TEXT: Color = Color::WHITE;
+const HELP_BG: Color = Color::new(0, 0, 0, 190);
 
 struct Pocket {
     position: Vector3,
@@ -846,11 +860,202 @@ fn cursor_cone_distance(rl: &RaylibHandle, camera: Camera3D) -> f32 {
     (ROTATE_CONE_HEIGHT / downness).clamp(ROTATE_MIN_DIST, ROTATE_VIRTUAL_MAX_DIST)
 }
 
+fn point_in_rect(px: f32, py: f32, x: i32, y: i32, w: i32, h: i32) -> bool {
+    px >= x as f32 && px <= (x + w) as f32 && py >= y as f32 && py <= (y + h) as f32
+}
+
+/// A single on-screen touch/click button. Positions are recomputed from
+/// the current screen size every frame (see `touch_ui`) rather than
+/// stored, so the layout holds up across window resizes.
+struct Btn {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    label: &'static str,
+}
+
+impl Btn {
+    fn new(x: i32, y: i32, w: i32, h: i32, label: &'static str) -> Self {
+        Btn { x, y, w, h, label }
+    }
+
+    fn hit(&self, mouse: Vector2) -> bool {
+        point_in_rect(mouse.x, mouse.y, self.x, self.y, self.w, self.h)
+    }
+
+    fn draw(&self, d: &mut RaylibDrawHandle, mouse: Vector2, active: bool) {
+        let hovered = self.hit(mouse);
+        let fill = if active {
+            BTN_FILL_ACTIVE
+        } else if hovered {
+            Color::new(255, 255, 255, 70)
+        } else {
+            BTN_FILL
+        };
+        d.draw_rectangle(self.x, self.y, self.w, self.h, fill);
+        d.draw_rectangle_lines(self.x, self.y, self.w, self.h, BTN_BORDER);
+        let text_w = d.measure_text(self.label, BTN_FONT);
+        d.draw_text(
+            self.label,
+            self.x + (self.w - text_w) / 2,
+            self.y + (self.h - BTN_FONT) / 2,
+            BTN_FONT,
+            BTN_TEXT,
+        );
+    }
+}
+
+/// All on-screen controls: a camera cluster (pan/rotate/zoom) bottom-left,
+/// action buttons (mirroring the keyboard hotkeys) bottom-right, and a
+/// help toggle top-right. Rebuilt fresh from the current screen size every
+/// frame -- cheap (a couple dozen integer adds), and the only way the
+/// layout stays correct as the window/canvas is resized.
+struct TouchUi {
+    pan_up: Btn,
+    pan_down: Btn,
+    pan_left: Btn,
+    pan_right: Btn,
+    rot_left: Btn,
+    rot_right: Btn,
+    zoom_in: Btn,
+    zoom_out: Btn,
+    reset: Btn,
+    test: Btn,
+    // `None` while collapsed via `expand_toggle` -- not drawn, not
+    // hit-tested, no space reserved for them.
+    ghost: Option<Btn>,
+    aim: Option<Btn>,
+    expand_toggle: Btn,
+    view: Btn,
+    center: Btn,
+    help: Btn,
+}
+
+fn opt_hit(btn: &Option<Btn>, mouse: Vector2) -> bool {
+    btn.as_ref().is_some_and(|b| b.hit(mouse))
+}
+
+impl TouchUi {
+    fn hit_any(&self, mouse: Vector2) -> bool {
+        [
+            &self.pan_up,
+            &self.pan_down,
+            &self.pan_left,
+            &self.pan_right,
+            &self.rot_left,
+            &self.rot_right,
+            &self.zoom_in,
+            &self.zoom_out,
+            &self.reset,
+            &self.test,
+            &self.expand_toggle,
+            &self.view,
+            &self.center,
+            &self.help,
+        ]
+        .iter()
+        .any(|b| b.hit(mouse))
+            || opt_hit(&self.ghost, mouse)
+            || opt_hit(&self.aim, mouse)
+    }
+}
+
+fn touch_ui(
+    screen_w: i32,
+    screen_h: i32,
+    reset_label: &'static str,
+    ghost_aim_visible: bool,
+) -> TouchUi {
+    let step = BTN + BTN_GAP;
+
+    // Bottom-left: a 4x2 grid (Q ^ E + / < v > -), a square 2x2 CENTER
+    // button to its right, and a LOOK header bar spanning both on top.
+    let grid_x = BTN_MARGIN;
+    let row_bottom_y = screen_h - BTN_MARGIN - BTN;
+    let row_top_y = row_bottom_y - step;
+    let look_y = row_top_y - step;
+    let col_x = |col: i32| grid_x + col * step;
+
+    let rot_left = Btn::new(col_x(0), row_top_y, BTN, BTN, "Q");
+    let pan_up = Btn::new(col_x(1), row_top_y, BTN, BTN, "^");
+    let rot_right = Btn::new(col_x(2), row_top_y, BTN, BTN, "E");
+    let zoom_in = Btn::new(col_x(3), row_top_y, BTN, BTN, "+");
+
+    let pan_left = Btn::new(col_x(0), row_bottom_y, BTN, BTN, "<");
+    let pan_down = Btn::new(col_x(1), row_bottom_y, BTN, BTN, "v");
+    let pan_right = Btn::new(col_x(2), row_bottom_y, BTN, BTN, ">");
+    let zoom_out = Btn::new(col_x(3), row_bottom_y, BTN, BTN, "-");
+
+    let center_w = 2 * BTN + BTN_GAP;
+    let center_x = col_x(3) + step;
+    let center = Btn::new(center_x, row_top_y, center_w, center_w, "CENTER");
+
+    let look_w = (center_x + center_w) - grid_x;
+    let view = Btn::new(grid_x, look_y, look_w, BTN, "LOOK");
+
+    // Bottom-right: HIT stands alone, mirroring the Space hotkey -- a big
+    // 3x3 square, since it's the main "do the thing" action.
+    let hit_w = 3 * BTN + 2 * BTN_GAP;
+    let test = Btn::new(
+        screen_w - BTN_MARGIN - hit_w,
+        screen_h - BTN_MARGIN - hit_w,
+        hit_w,
+        hit_w,
+        "HIT",
+    );
+
+    // Top-right: help, with an expand/collapse toggle directly below it.
+    // Reset sits to help's left, two squares wide so its "CLEAR"/"NEXT"
+    // label has room to breathe, and its label reflects what pressing it
+    // will actually do right now. Ghost/Aim stack below reset, sharing its
+    // width, but only exist (and only take up space) while expanded.
+    let help = Btn::new(screen_w - BTN_MARGIN - BTN, BTN_MARGIN, BTN, BTN, "?");
+    let expand_toggle = Btn::new(
+        help.x,
+        BTN_MARGIN + step,
+        BTN,
+        BTN,
+        if ghost_aim_visible { ">>" } else { "<<" },
+    );
+    let reset_w = 2 * BTN + BTN_GAP;
+    let reset_x = help.x - BTN_GAP - reset_w;
+    let reset = Btn::new(reset_x, BTN_MARGIN, reset_w, BTN, reset_label);
+    let (ghost, aim) = if ghost_aim_visible {
+        (
+            Some(Btn::new(reset_x, BTN_MARGIN + step, reset_w, BTN, "GHOST")),
+            Some(Btn::new(reset_x, BTN_MARGIN + 2 * step, reset_w, BTN, "AIM")),
+        )
+    } else {
+        (None, None)
+    };
+
+    TouchUi {
+        pan_up,
+        pan_down,
+        pan_left,
+        pan_right,
+        rot_left,
+        rot_right,
+        zoom_in,
+        zoom_out,
+        reset,
+        test,
+        ghost,
+        aim,
+        expand_toggle,
+        view,
+        center,
+        help,
+    }
+}
+
 fn main() {
     let (mut rl, thread) = raylib::init()
         .size(1280, 800)
         .title("Snooker Aim Trainer")
         .msaa_4x()
+        .resizable()
         .build();
 
     rl.set_target_fps(60);
@@ -867,6 +1072,8 @@ fn main() {
     let mut saved_camera: Option<Camera3D> = None;
     let mut last_view_camera: Option<Camera3D> = None;
     let mut frozen_aim_camera = camera;
+    let mut help_visible = false;
+    let mut ghost_aim_visible = true;
 
     let light_panels = light_panel_centers();
 
@@ -903,140 +1110,199 @@ fn main() {
     ghost_material.set_shader(&ghost_shader);
 
     while !rl.window_should_close() {
-        if rl.is_key_pressed(KeyboardKey::KEY_R) {
-            if shot_test.is_some() {
-                // A tested shot is on screen (paths/gate result) — first R
-                // just clears that, rather than jumping straight to a new
-                // layout.
-                shot_test = None;
-            } else {
-                (cue_ball_pos, object_ball_pos) = random_shot_setup(&pockets);
-                let (pocket_idx, gate_dir, _) =
-                    best_pocket(&pockets, cue_ball_pos, object_ball_pos);
-                target_pocket = (pocket_idx, gate_dir);
-                camera = aiming_camera(cue_ball_pos, object_ball_pos);
-                view_mode = false;
-                saved_camera = None;
-                last_view_camera = None;
+        let mouse = rl.get_mouse_position();
+        let screen_w = rl.get_screen_width();
+        let screen_h = rl.get_screen_height();
+        let reset_label = if shot_test.is_some() { "CLEAR" } else { "NEXT" };
+        let ui = touch_ui(screen_w, screen_h, reset_label, ghost_aim_visible);
+        let tap = rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
+        let held = rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT);
+        let over_ui = ui.hit_any(mouse);
+
+        if rl.is_key_pressed(KeyboardKey::KEY_SLASH) || (tap && ui.help.hit(mouse)) {
+            help_visible = !help_visible;
+        } else if help_visible && tap {
+            // The help button itself is excluded by the branch above, so any
+            // other tap/click while the popup is open just dismisses it.
+            help_visible = false;
+        }
+
+        if !help_visible {
+            if tap && ui.expand_toggle.hit(mouse) {
+                ghost_aim_visible = !ghost_aim_visible;
             }
-        }
 
-        if rl.is_key_pressed(KeyboardKey::KEY_C) {
-            // Re-center the orbit pivot on the cue ball without touching
-            // zoom or viewing angle: shift both position and target by the
-            // same offset, so their relative vector is unchanged.
-            let offset = cue_ball_pos - camera.target;
-            camera.target = cue_ball_pos;
-            camera.position = camera.position + offset;
-        }
-
-        if rl.is_key_pressed(KeyboardKey::KEY_V) {
-            if view_mode {
-                // Exiting: remember exactly where we were so re-entering
-                // resumes here, then snap back to the pre-view-mode camera.
-                last_view_camera = Some(camera);
-                if let Some(saved) = saved_camera.take() {
-                    camera = saved;
-                }
-            } else {
-                // The frozen aim must come from the normal-mode camera (the
-                // one the player actually aims with) — captured here,
-                // before any swap to a resumed free-roam view below.
-                // Otherwise, re-entering after having zoomed/orbited around
-                // while inspecting would redefine the "frozen" aim from
-                // that free-roam drift instead of the real aim.
-                if last_view_camera.is_none() {
-                    // First time entering this session: re-center the orbit
-                    // pivot on the cue ball (instead of whatever the target
-                    // happened to be) so rotating while inspecting orbits
-                    // around the ball, not some unrelated leftover point.
-                    let offset = cue_ball_pos - camera.target;
-                    camera.target = cue_ball_pos;
-                    camera.position = camera.position + offset;
-                }
-                frozen_aim_camera = camera;
-                saved_camera = Some(camera);
-
-                if let Some(resume) = last_view_camera {
-                    camera = resume;
+            if rl.is_key_pressed(KeyboardKey::KEY_R) || (tap && ui.reset.hit(mouse)) {
+                if shot_test.is_some() {
+                    // A tested shot is on screen (paths/gate result) — first R
+                    // just clears that, rather than jumping straight to a new
+                    // layout.
+                    shot_test = None;
+                } else {
+                    (cue_ball_pos, object_ball_pos) = random_shot_setup(&pockets);
+                    let (pocket_idx, gate_dir, _) =
+                        best_pocket(&pockets, cue_ball_pos, object_ball_pos);
+                    target_pocket = (pocket_idx, gate_dir);
+                    camera = aiming_camera(cue_ball_pos, object_ball_pos);
+                    view_mode = false;
+                    saved_camera = None;
+                    last_view_camera = None;
                 }
             }
-            view_mode = !view_mode;
-        }
 
-        if rl.is_key_pressed(KeyboardKey::KEY_G) {
-            show_ghost_ball = !show_ghost_ball;
-        }
-        if rl.is_key_pressed(KeyboardKey::KEY_H) {
-            show_aim_line = !show_aim_line;
+            if rl.is_key_pressed(KeyboardKey::KEY_C) || (tap && ui.center.hit(mouse)) {
+                // Re-center the orbit pivot on the cue ball without touching
+                // zoom or viewing angle: shift both position and target by the
+                // same offset, so their relative vector is unchanged.
+                let offset = cue_ball_pos - camera.target;
+                camera.target = cue_ball_pos;
+                camera.position = camera.position + offset;
+            }
+
+            if rl.is_key_pressed(KeyboardKey::KEY_V) || (tap && ui.view.hit(mouse)) {
+                if view_mode {
+                    // Exiting: remember exactly where we were so re-entering
+                    // resumes here, then snap back to the pre-view-mode camera.
+                    last_view_camera = Some(camera);
+                    if let Some(saved) = saved_camera.take() {
+                        camera = saved;
+                    }
+                } else {
+                    // The frozen aim must come from the normal-mode camera (the
+                    // one the player actually aims with) — captured here,
+                    // before any swap to a resumed free-roam view below.
+                    // Otherwise, re-entering after having zoomed/orbited around
+                    // while inspecting would redefine the "frozen" aim from
+                    // that free-roam drift instead of the real aim.
+                    if last_view_camera.is_none() {
+                        // First time entering this session: re-center the orbit
+                        // pivot on the cue ball (instead of whatever the target
+                        // happened to be) so rotating while inspecting orbits
+                        // around the ball, not some unrelated leftover point.
+                        let offset = cue_ball_pos - camera.target;
+                        camera.target = cue_ball_pos;
+                        camera.position = camera.position + offset;
+                    }
+                    frozen_aim_camera = camera;
+                    saved_camera = Some(camera);
+
+                    if let Some(resume) = last_view_camera {
+                        camera = resume;
+                    }
+                }
+                view_mode = !view_mode;
+            }
+
+            if rl.is_key_pressed(KeyboardKey::KEY_G) || (tap && opt_hit(&ui.ghost, mouse)) {
+                show_ghost_ball = !show_ghost_ball;
+            }
+            if rl.is_key_pressed(KeyboardKey::KEY_H) || (tap && opt_hit(&ui.aim, mouse)) {
+                show_aim_line = !show_aim_line;
+            }
         }
 
         // While in view mode, the cue's aim stays frozen at whatever it was
-        // when view mode was entered, even as the camera keeps moving.
+        // when view mode was entered, even as the camera keeps moving. This
+        // is derived from state, not input, so it's still computed while the
+        // help popup is open (the frozen 3D scene keeps rendering behind it).
         let aim_camera = if view_mode { frozen_aim_camera } else { camera };
         let shot_dir = shot_direction_xz(aim_camera);
 
-        if let (true, Some(dir)) = (rl.is_key_pressed(KeyboardKey::KEY_SPACE), shot_dir) {
-            let (pocket_idx, gate_dir) = target_pocket;
-            shot_test = Some(test_shot(
-                dir,
-                cue_ball_pos,
-                object_ball_pos,
-                pockets[pocket_idx].position,
-                gate_dir,
-            ));
-        }
+        if !help_visible {
+            if let (true, Some(dir)) = (
+                rl.is_key_pressed(KeyboardKey::KEY_SPACE) || (tap && ui.test.hit(mouse)),
+                shot_dir,
+            ) {
+                let (pocket_idx, gate_dir) = target_pocket;
+                shot_test = Some(test_shot(
+                    dir,
+                    cue_ball_pos,
+                    object_ball_pos,
+                    pockets[pocket_idx].position,
+                    gate_dir,
+                ));
+            }
 
-        let pan_dist = PAN_SPEED * rl.get_frame_time();
-        if rl.is_key_down(KeyboardKey::KEY_W) || rl.is_key_down(KeyboardKey::KEY_UP) {
-            camera.move_forward(pan_dist, true);
-        }
-        if rl.is_key_down(KeyboardKey::KEY_S) || rl.is_key_down(KeyboardKey::KEY_DOWN) {
-            camera.move_forward(-pan_dist, true);
-        }
-        if rl.is_key_down(KeyboardKey::KEY_A) || rl.is_key_down(KeyboardKey::KEY_LEFT) {
-            camera.move_right(-pan_dist, true);
-        }
-        if rl.is_key_down(KeyboardKey::KEY_D) || rl.is_key_down(KeyboardKey::KEY_RIGHT) {
-            camera.move_right(pan_dist, true);
-        }
+            let pan_dist = PAN_SPEED * rl.get_frame_time();
+            if rl.is_key_down(KeyboardKey::KEY_W)
+                || rl.is_key_down(KeyboardKey::KEY_UP)
+                || (held && ui.pan_up.hit(mouse))
+            {
+                camera.move_forward(pan_dist, true);
+            }
+            if rl.is_key_down(KeyboardKey::KEY_S)
+                || rl.is_key_down(KeyboardKey::KEY_DOWN)
+                || (held && ui.pan_down.hit(mouse))
+            {
+                camera.move_forward(-pan_dist, true);
+            }
+            if rl.is_key_down(KeyboardKey::KEY_A)
+                || rl.is_key_down(KeyboardKey::KEY_LEFT)
+                || (held && ui.pan_left.hit(mouse))
+            {
+                camera.move_right(-pan_dist, true);
+            }
+            if rl.is_key_down(KeyboardKey::KEY_D)
+                || rl.is_key_down(KeyboardKey::KEY_RIGHT)
+                || (held && ui.pan_right.hit(mouse))
+            {
+                camera.move_right(pan_dist, true);
+            }
 
-        let key_rotate = KEY_ROTATE_SPEED_DEG.to_radians() * rl.get_frame_time();
-        if rl.is_key_down(KeyboardKey::KEY_Q) {
-            camera.yaw(key_rotate, true);
-        }
-        if rl.is_key_down(KeyboardKey::KEY_E) {
-            camera.yaw(-key_rotate, true);
-        }
+            let key_rotate = KEY_ROTATE_SPEED_DEG.to_radians() * rl.get_frame_time();
+            if rl.is_key_down(KeyboardKey::KEY_Q) || (held && ui.rot_left.hit(mouse)) {
+                camera.yaw(key_rotate, true);
+            }
+            if rl.is_key_down(KeyboardKey::KEY_E) || (held && ui.rot_right.hit(mouse)) {
+                camera.yaw(-key_rotate, true);
+            }
 
-        if rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT) {
-            let delta = rl.get_mouse_delta();
-            // On the table: real distance to the point under the cursor.
-            // Off the table: the virtual cone (angle-only, continuous —
-            // no fixed number, no discontinuity at the table's edge).
-            let cursor_dist = cursor_on_table_point(&rl, camera)
-                .map(|hit| {
-                    camera
-                        .position
-                        .distance(hit)
-                        .clamp(ROTATE_MIN_DIST, ROTATE_VIRTUAL_MAX_DIST)
-                })
-                .unwrap_or_else(|| cursor_cone_distance(&rl, camera));
-            let sensitivity = ROTATE_SENSITIVITY * (ROTATE_REFERENCE_DISTANCE / cursor_dist);
-            camera.yaw(-delta.x * sensitivity, true);
-            camera.pitch(-delta.y * sensitivity, true, true, false);
-        }
-        let wheel = rl.get_mouse_wheel_move();
-        if wheel != 0.0 {
-            // Zoom toward whatever world point is under the cursor so that
-            // point stays fixed on screen as we zoom, instead of always
-            // zooming to the orbit target.
-            if let Some(hit) = cursor_table_point(&rl, camera) {
-                let factor = (wheel * 0.15).clamp(-0.9, 0.9);
-                camera.position = camera.position.lerp(hit, factor);
-                camera.target = camera.target.lerp(hit, factor);
+            if held && !over_ui {
+                let delta = rl.get_mouse_delta();
+                // On the table: real distance to the point under the cursor.
+                // Off the table: the virtual cone (angle-only, continuous —
+                // no fixed number, no discontinuity at the table's edge).
+                let cursor_dist = cursor_on_table_point(&rl, camera)
+                    .map(|hit| {
+                        camera
+                            .position
+                            .distance(hit)
+                            .clamp(ROTATE_MIN_DIST, ROTATE_VIRTUAL_MAX_DIST)
+                    })
+                    .unwrap_or_else(|| cursor_cone_distance(&rl, camera));
+                let sensitivity = ROTATE_SENSITIVITY * (ROTATE_REFERENCE_DISTANCE / cursor_dist);
+                camera.yaw(-delta.x * sensitivity, true);
+                camera.pitch(-delta.y * sensitivity, true, true, false);
+            }
+            let wheel = rl.get_mouse_wheel_move();
+            if wheel != 0.0 && !over_ui {
+                // Zoom toward whatever world point is under the cursor so that
+                // point stays fixed on screen as we zoom, instead of always
+                // zooming to the orbit target.
+                if let Some(hit) = cursor_table_point(&rl, camera) {
+                    let factor = (wheel * 0.15).clamp(-0.9, 0.9);
+                    camera.position = camera.position.lerp(hit, factor);
+                    camera.target = camera.target.lerp(hit, factor);
 
-                let dist = camera.position.distance(camera.target).clamp(0.15, 6.0);
+                    let dist = camera.position.distance(camera.target).clamp(0.15, 6.0);
+                    let dir = (camera.position - camera.target).normalize();
+                    camera.position = camera.target + dir.scale(dist);
+                }
+            }
+
+            // On-screen zoom buttons: there's no cursor-hit point to zoom
+            // toward (the cursor is on the button, not over the table), so
+            // these just zoom straight along the existing camera->target axis.
+            let mut button_zoom = 0.0;
+            if held && ui.zoom_in.hit(mouse) {
+                button_zoom -= ZOOM_BUTTON_SPEED * rl.get_frame_time();
+            }
+            if held && ui.zoom_out.hit(mouse) {
+                button_zoom += ZOOM_BUTTON_SPEED * rl.get_frame_time();
+            }
+            if button_zoom != 0.0 {
+                let dist =
+                    (camera.position.distance(camera.target) + button_zoom).clamp(0.15, 6.0);
                 let dir = (camera.position - camera.target).normalize();
                 camera.position = camera.target + dir.scale(dist);
             }
@@ -1107,15 +1373,58 @@ fn main() {
         }
 
         d.draw_fps(10, 10);
-        d.draw_text(
-            "Drag/scroll: orbit  |  WASD/arrows: pan  |  Q/E: rotate  |  C: center on cue ball  |  R: reposition  |  Space: test shot  |  G: ghost ball  |  H: aim line  |  V: view mode",
-            10,
-            36,
-            18,
-            Color::LIGHTGRAY,
-        );
         if view_mode {
-            d.draw_text("VIEW MODE (cue aim frozen)", 10, 58, 18, Color::YELLOW);
+            d.draw_text("VIEW MODE (cue aim frozen)", 10, 36, 18, Color::YELLOW);
+        }
+
+        // On-screen touch controls -- drawn every frame, on every platform
+        // (desktop mouse clicks work identically to touch taps, since
+        // browsers synthesize mouse events from touch input).
+        ui.pan_up.draw(&mut d, mouse, false);
+        ui.pan_down.draw(&mut d, mouse, false);
+        ui.pan_left.draw(&mut d, mouse, false);
+        ui.pan_right.draw(&mut d, mouse, false);
+        ui.rot_left.draw(&mut d, mouse, false);
+        ui.rot_right.draw(&mut d, mouse, false);
+        ui.zoom_in.draw(&mut d, mouse, false);
+        ui.zoom_out.draw(&mut d, mouse, false);
+        ui.reset.draw(&mut d, mouse, false);
+        ui.test.draw(&mut d, mouse, false);
+        if let Some(b) = &ui.ghost {
+            b.draw(&mut d, mouse, show_ghost_ball);
+        }
+        if let Some(b) = &ui.aim {
+            b.draw(&mut d, mouse, show_aim_line);
+        }
+        ui.expand_toggle.draw(&mut d, mouse, false);
+        ui.view.draw(&mut d, mouse, view_mode);
+        ui.center.draw(&mut d, mouse, false);
+        ui.help.draw(&mut d, mouse, help_visible);
+
+        if help_visible {
+            d.draw_rectangle(0, 0, screen_w, screen_h, HELP_BG);
+
+            let lines = [
+                "Controls   (tap anywhere, or ? / the ? button, to close)",
+                "",
+                "Drag / D-pad     orbit the camera",
+                "Scroll / +  -    zoom toward the cursor / camera target",
+                "WASD or arrows   pan the camera",
+                "Q / E            rotate (yaw) the camera",
+                "C / CENTER       re-center the orbit pivot on the cue ball",
+                "V / LOOK         toggle view mode (inspect freely, aim stays frozen)",
+                "G / GHOST        toggle the ghost cue ball",
+                "H / AIM          toggle the object-ball aim line (needs ghost ball on)",
+                ">> / <<          show or hide the GHOST/AIM buttons",
+                "Space / HIT      test the current aim: trace both balls' paths",
+                "R / CLEAR-NEXT   clear a tested shot, or reposition both balls",
+                "? / help button  toggle this popup",
+            ];
+            let start_y = 90;
+            let line_h = 26;
+            for (i, line) in lines.iter().enumerate() {
+                d.draw_text(line, 24, start_y + i as i32 * line_h, 20, Color::RAYWHITE);
+            }
         }
     }
 }

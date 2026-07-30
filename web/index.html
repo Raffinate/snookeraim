@@ -2,14 +2,25 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Snooker Aim Trainer</title>
   <style>
-    html, body { margin: 0; padding: 0; background: #1e1e1e; }
-    canvas { display: block; margin: 0 auto; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #1e1e1e;
+      overflow: hidden;
+      height: 100%;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
   </style>
 </head>
 <body>
-  <canvas id="canvas" width="1280" height="800" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
   <script>
     var Module = {
       canvas: document.getElementById('canvas'),
