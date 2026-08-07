@@ -28,11 +28,16 @@ pub const CAMERA_STANCE_LATERAL_OFFSET: f32 = 0.28; // shifted left of the aim l
 // vantage instead of the same person standing further away.
 pub const CAMERA_POT_LINE_BACK_DISTANCE: f32 = 1.7;
 
-// Rotation sensitivity is proximity-to-object-ball based: players reach for
-// "put the cursor near the ball" when they want fine, precise control, so
-// sensitivity ramps from a slow minimum right on top of the object ball's
-// on-screen position up to full speed by ROTATE_PRECISION_RADIUS_PX pixels
-// away, and stays at full speed beyond that.
+// Rotation sensitivity is proximity-based: players reach for "put the
+// cursor near something important" when they want fine, precise control,
+// so sensitivity ramps from a slow minimum right on top of the nearest
+// reference point's on-screen position up to full speed by
+// ROTATE_PRECISION_RADIUS_PX pixels away, and stays at full speed beyond
+// that. Proximity is vertical-only (screen Y), not full 2D screen
+// distance -- horizontal cursor movement is what actually drives yaw (the
+// primary aim adjustment), so keying off full radial distance would mean
+// the act of adjusting aim itself carries the cursor out of the precision
+// zone; vertical position isn't tied to that motion the same way.
 pub const ROTATE_SENSITIVITY: f32 = 0.005; // radians per pixel, at full speed
 pub const ROTATE_PRECISION_RADIUS_PX: f32 = 160.0;
 pub const ROTATE_MIN_SENSITIVITY_SCALE: f32 = 0.15; // fraction of full speed right on the ball
@@ -170,9 +175,12 @@ pub fn zoom_toward(camera: &mut Camera3D, hit: Vector3, factor: f32) {
 /// the object ball: right on top of it gives `ROTATE_MIN_SENSITIVITY_SCALE`
 /// of full speed for precise aiming, ramping linearly up to full speed by
 /// `ROTATE_PRECISION_RADIUS_PX` pixels away and staying there beyond that.
-pub fn rotate_sensitivity(rl: &RaylibHandle, camera: Camera3D, object_ball_pos: Vector3) -> f32 {
-    let ball_screen = rl.get_world_to_screen(object_ball_pos, camera);
-    let screen_dist = rl.get_mouse_position().distance(ball_screen);
+pub fn rotate_sensitivity(rl: &RaylibHandle, camera: Camera3D, reference_points: &[Vector3]) -> f32 {
+    let mouse_y = rl.get_mouse_position().y;
+    let screen_dist = reference_points
+        .iter()
+        .map(|&p| (mouse_y - rl.get_world_to_screen(p, camera).y).abs())
+        .fold(f32::INFINITY, f32::min);
     let t = (screen_dist / ROTATE_PRECISION_RADIUS_PX).clamp(0.0, 1.0);
     let scale = ROTATE_MIN_SENSITIVITY_SCALE + (1.0 - ROTATE_MIN_SENSITIVITY_SCALE) * t;
     ROTATE_SENSITIVITY * scale

@@ -38,7 +38,7 @@ pub struct GameState {
     pub(crate) camera: Camera3D,
     pub(crate) cue_ball_pos: Vector3,
     pub(crate) object_ball_pos: Vector3,
-    pub(crate) target_pocket: (usize, (f32, f32)),
+    pub(crate) target_pocket: usize,
     pub(crate) shot_test: Option<ShotTest>,
     pub(crate) view_mode: bool,
     pub(crate) saved_camera: Option<Camera3D>,
@@ -56,12 +56,12 @@ impl GameState {
     pub fn new(pockets: &[Pocket]) -> GameState {
         let (cue_ball_pos, object_ball_pos) = random_shot_setup(pockets);
         let camera = aiming_camera(cue_ball_pos, object_ball_pos);
-        let (pocket_idx, gate_dir, _) = best_pocket(pockets, cue_ball_pos, object_ball_pos);
+        let (pocket_idx, _, _) = best_pocket(pockets, cue_ball_pos, object_ball_pos);
         GameState {
             camera,
             cue_ball_pos,
             object_ball_pos,
-            target_pocket: (pocket_idx, gate_dir),
+            target_pocket: pocket_idx,
             shot_test: None,
             show_ghost_ball: true,
             show_aim_line: false,
@@ -115,14 +115,13 @@ impl GameState {
             rl.is_key_pressed(KeyboardKey::KEY_SPACE) || (tap && ui.test.hit(mouse)),
             shot_dir,
         ) {
-            let (pocket_idx, gate_dir) = self.target_pocket;
+            let pocket_idx = self.target_pocket;
             self.shot_test = Some(test_shot(
                 dir,
                 self.cue_ball_pos,
                 self.object_ball_pos,
                 pockets[pocket_idx].position,
                 pockets[pocket_idx].radius,
-                gate_dir,
             ));
         }
     }
@@ -137,6 +136,8 @@ impl GameState {
         held: bool,
         tap: bool,
         over_ui: bool,
+        shot_dir: Option<(f32, f32)>,
+        pockets: &[Pocket],
     ) {
         let pan_dist = PAN_SPEED * rl.get_frame_time();
         if rl.is_key_down(KeyboardKey::KEY_W)
@@ -185,7 +186,20 @@ impl GameState {
             // and the browser's synthesized mouse position (tracking
             // just the first finger) would otherwise fight the pinch.
             let delta = rl.get_mouse_delta();
-            let sensitivity = rotate_sensitivity(rl, self.camera, self.object_ball_pos);
+            // Ghost ball has no defined position when the camera has no
+            // horizontal bearing (shot_dir is None) -- fall back to the
+            // object ball itself, already in the list, so this just drops
+            // out as a harmless duplicate rather than needing a branch.
+            let ghost_pos = shot_dir
+                .map(|dir| cue_raycast(dir, self.cue_ball_pos, self.object_ball_pos).ghost_pos)
+                .unwrap_or(self.object_ball_pos);
+            let reference_points = [
+                self.cue_ball_pos,
+                self.object_ball_pos,
+                ghost_pos,
+                pockets[self.target_pocket].position,
+            ];
+            let sensitivity = rotate_sensitivity(rl, self.camera, &reference_points);
             self.camera.yaw(-delta.x * sensitivity, true);
             self.camera.pitch(-delta.y * sensitivity, true, true, false);
         }
@@ -261,9 +275,9 @@ impl GameState {
                 self.shot_test = None;
             } else {
                 (self.cue_ball_pos, self.object_ball_pos) = random_shot_setup(pockets);
-                let (pocket_idx, gate_dir, _) =
+                let (pocket_idx, _, _) =
                     best_pocket(pockets, self.cue_ball_pos, self.object_ball_pos);
-                self.target_pocket = (pocket_idx, gate_dir);
+                self.target_pocket = pocket_idx;
                 self.camera = aiming_camera(self.cue_ball_pos, self.object_ball_pos);
                 self.view_mode = false;
                 self.saved_camera = None;
@@ -384,7 +398,7 @@ impl GameState {
                 self.saved_camera = Some(self.camera);
                 self.view_mode = true;
             }
-            self.camera = pot_line_camera(self.object_ball_pos, pockets[self.target_pocket.0].position);
+            self.camera = pot_line_camera(self.object_ball_pos, pockets[self.target_pocket].position);
         }
     }
 
@@ -525,7 +539,7 @@ impl GameState {
             }
         }
 
-        let (pocket_idx, gate_dir) = self.target_pocket;
+        let pocket_idx = self.target_pocket;
         let gate_color = match self.shot_test.as_ref().map(|s| &s.gate_state) {
             Some(GateState::Success) => GATE_SUCCESS_COLOR,
             Some(GateState::Miss) => GATE_MISS_COLOR,
@@ -535,7 +549,6 @@ impl GameState {
             d3,
             assets.pockets[pocket_idx].position,
             assets.pockets[pocket_idx].radius,
-            gate_dir,
             gate_color,
         );
 

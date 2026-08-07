@@ -52,7 +52,7 @@ fn main() {
 
         if !state.help_visible {
             state.maybe_test_shot(&rl, &ui, mouse, tap, shot_dir, &assets.pockets);
-            state.handle_camera_movement(&rl, &ui, mouse, held, tap, over_ui);
+            state.handle_camera_movement(&rl, &ui, mouse, held, tap, over_ui, shot_dir, &assets.pockets);
         }
 
         assets.sync_view_pos(state.camera.position);
