@@ -2,7 +2,6 @@ use raylib::prelude::*;
 
 use crate::table::{cushion_t, random_ball_position, safe_half_length, safe_half_width, BALL_RADIUS, MAX_PLACEMENT_ATTEMPTS, MAX_REALISTIC_CUT_DEG, Pocket};
 
-pub const GATE_WIDTH_FACTOR: f32 = 1.4; // gate width, in ball diameters
 pub const GATE_POST_RADIUS: f32 = 0.008;
 pub const GATE_POST_HEIGHT: f32 = 0.09;
 pub const PATH_HEIGHT: f32 = 0.0015; // path stripes sit just above the cloth
@@ -158,16 +157,40 @@ pub struct ShotTest {
     pub gate_state: GateState,
 }
 
+/// Half-width of the potting gate for an object ball crossing at angle ε
+/// from the ideal straight-on line to the pocket (`cos_eps` = cos ε; 1.0 is
+/// a dead-straight approach). `pocket_radius` approximates half the
+/// pocket's true mouth width.
+///
+/// Derived by treating each jaw as a fixed point the ball's center must
+/// clear by BALL_RADIUS at all times along its path (not just at the
+/// crossing point): for a path crossing the gate line at offset x0 from
+/// the pocket center, the perpendicular distance from a jaw at ±pocket_radius
+/// to that path is (pocket_radius ∓ x0)·cos(ε), which must be ≥ BALL_RADIUS
+/// on both sides. Solving both inequalities for x0 gives the valid range
+/// [-h, h] where h = pocket_radius − BALL_RADIUS/cos(ε) -- this function.
+/// At ε=0 that's just pocket_radius − BALL_RADIUS (full ball clearance on
+/// each side); it shrinks as ε grows and goes negative once potting is
+/// geometrically impossible at that angle regardless of aim (the point
+/// where the pocket's angle-foreshortened projected width drops below the
+/// ball's own diameter).
+fn gate_half_width(pocket_radius: f32, cos_eps: f32) -> f32 {
+    pocket_radius - BALL_RADIUS / cos_eps
+}
+
 /// Simulates a dead-straight shot from the current cue direction: traces
 /// the cue ball to its first contact (object ball or cushion), then — if it
 /// hit the object ball — traces the object ball's resulting path (straight
 /// through its center, no spin) to its own first event: passing through the
-/// target gate (potted) or hitting a cushion (missed).
+/// target gate (potted) or hitting a cushion (missed). The gate narrows as
+/// the resulting path deviates from the ideal straight-on line to the
+/// pocket -- see `gate_half_width`.
 pub fn test_shot(
     shot_dir: (f32, f32),
     cue_ball_pos: Vector3,
     object_ball_pos: Vector3,
     pocket_pos: Vector3,
+    pocket_radius: f32,
     gate_dir: (f32, f32),
 ) -> ShotTest {
     let raycast = cue_raycast(shot_dir, cue_ball_pos, object_ball_pos);
@@ -197,16 +220,20 @@ pub fn test_shot(
 
     let t_red_cushion = cushion_t(object_ball_pos.x, object_ball_pos.z, rdx, rdz);
 
-    let half = BALL_RADIUS * GATE_WIDTH_FACTOR;
-    let (px, pz) = (-gate_dir.1 * half, gate_dir.0 * half);
-    let gate_a = (pocket_pos.x + px, pocket_pos.z + pz);
-    let gate_b = (pocket_pos.x - px, pocket_pos.z - pz);
-    let t_gate = ray_segment_t(
-        (object_ball_pos.x, object_ball_pos.z),
-        (rdx, rdz),
-        gate_a,
-        gate_b,
-    );
+    // cos(ε): how far this shot's actual departure direction deviates from
+    // the ideal straight-on line to the pocket. cos_eps <= 0 means the ball
+    // isn't even heading toward the pocket's side of that line -- no gate
+    // is possible.
+    let cos_eps = rdx * gate_dir.0 + rdz * gate_dir.1;
+    let t_gate = (cos_eps > 0.0)
+        .then(|| gate_half_width(pocket_radius, cos_eps))
+        .filter(|half| *half > 0.0)
+        .and_then(|half| {
+            let (px, pz) = (-gate_dir.1 * half, gate_dir.0 * half);
+            let gate_a = (pocket_pos.x + px, pocket_pos.z + pz);
+            let gate_b = (pocket_pos.x - px, pocket_pos.z - pz);
+            ray_segment_t((object_ball_pos.x, object_ball_pos.z), (rdx, rdz), gate_a, gate_b)
+        });
 
     // The gate sits at the true rail, at the pocket's opening — a bit
     // further out than the ball-radius-inset boundary `cushion_t` treats as
@@ -230,11 +257,19 @@ pub fn test_shot(
     }
 }
 
-/// Draws the potting "gate" at a pocket: two posts spanning a bit wider
-/// than a ball's diameter, perpendicular to the ball's intended path into
-/// the pocket.
-pub fn draw_gate(d: &mut impl RaylibDraw3D, pocket_pos: Vector3, gate_dir: (f32, f32), color: Color) {
-    let half = BALL_RADIUS * GATE_WIDTH_FACTOR;
+/// Draws the potting "gate" at a pocket: two posts at the pocket's real
+/// physical jaw positions (`pocket_radius` apart, unlike the ball's
+/// *center*-tolerance zone `gate_half_width` computes for the pass/fail
+/// check in `test_shot`, which is narrower and deliberately not what's
+/// drawn here). The jaws don't move with aim, so this is the same
+/// regardless of the current shot's angle -- what actually determines
+/// success is where a shot's ball-width path stripe (see
+/// `draw_path_stripe`) falls relative to these posts: the stripe's own
+/// edge reaches a post exactly at the true pass/fail boundary, so a near
+/// miss visually clips a post instead of the gate itself silently
+/// shrinking to an abstraction the player never sees.
+pub fn draw_gate(d: &mut impl RaylibDraw3D, pocket_pos: Vector3, pocket_radius: f32, gate_dir: (f32, f32), color: Color) {
+    let half = pocket_radius;
     let (px, pz) = (-gate_dir.1 * half, gate_dir.0 * half);
     let a = Vector3::new(pocket_pos.x + px, 0.0, pocket_pos.z + pz);
     let b = Vector3::new(pocket_pos.x - px, 0.0, pocket_pos.z - pz);

@@ -121,6 +121,7 @@ impl GameState {
                 self.cue_ball_pos,
                 self.object_ball_pos,
                 pockets[pocket_idx].position,
+                pockets[pocket_idx].radius,
                 gate_dir,
             ));
         }
@@ -530,7 +531,13 @@ impl GameState {
             Some(GateState::Miss) => GATE_MISS_COLOR,
             None => GATE_NEUTRAL_COLOR,
         };
-        draw_gate(d3, assets.pockets[pocket_idx].position, gate_dir, gate_color);
+        draw_gate(
+            d3,
+            assets.pockets[pocket_idx].position,
+            assets.pockets[pocket_idx].radius,
+            gate_dir,
+            gate_color,
+        );
 
         if let Some(test) = &self.shot_test {
             draw_path_stripe(d3, self.cue_ball_pos, test.white_end, PATH_WHITE_COLOR);
