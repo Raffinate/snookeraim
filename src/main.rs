@@ -411,16 +411,14 @@ const CAMERA_STANCE_LATERAL_OFFSET: f32 = 0.28; // shifted left of the aim line
 // vantage instead of the same person standing further away.
 const CAMERA_POT_LINE_BACK_DISTANCE: f32 = 1.7;
 
-const ROTATE_SENSITIVITY: f32 = 0.005; // radians per pixel, at ROTATE_REFERENCE_DISTANCE
-const ROTATE_REFERENCE_DISTANCE: f32 = 1.5; // meters
-const ROTATE_MIN_DIST: f32 = 0.3;
-// Off-table virtual-cone parameters (see cursor_cone_distance):
-// ROTATE_CONE_HEIGHT is tuned so typical on-table-adjacent angles land near
-// ROTATE_REFERENCE_DISTANCE; ROTATE_VIRTUAL_MAX_DIST is deliberately large
-// so shallow angles ("aiming at nothing") end up much slower, not just a
-// bit slower. Also doubles as the clamp ceiling for the on-table branch.
-const ROTATE_CONE_HEIGHT: f32 = 0.6;
-const ROTATE_VIRTUAL_MAX_DIST: f32 = 20.0;
+// Rotation sensitivity is proximity-to-object-ball based: players reach for
+// "put the cursor near the ball" when they want fine, precise control, so
+// sensitivity ramps from a slow minimum right on top of the object ball's
+// on-screen position up to full speed by ROTATE_PRECISION_RADIUS_PX pixels
+// away, and stays at full speed beyond that.
+const ROTATE_SENSITIVITY: f32 = 0.005; // radians per pixel, at full speed
+const ROTATE_PRECISION_RADIUS_PX: f32 = 160.0;
+const ROTATE_MIN_SENSITIVITY_SCALE: f32 = 0.15; // fraction of full speed right on the ball
 
 // A random layout is only "realistic" if the balls have some breathing room
 // and at least one pocket offers a pot that isn't a near-impossible sliver
@@ -1232,27 +1230,16 @@ fn zoom_toward(camera: &mut Camera3D, hit: Vector3, factor: f32) {
     camera.position = camera.target + dir.scale(dist);
 }
 
-/// Same as `cursor_table_point`, but only counts as a hit within the
-/// table's actual rendered extent (cloth + cushions). The y = 0 plane
-/// itself is infinite, so without this a cursor pointing at the empty
-/// background just past the table's edge would still math out to a nearby
-/// point and be treated as "aiming at something."
-fn cursor_on_table_point(rl: &RaylibHandle, camera: Camera3D) -> Option<Vector3> {
-    let hit = cursor_table_point(rl, camera)?;
-    let hw = TABLE_WIDTH / 2.0 + CUSHION_THICKNESS;
-    let hl = TABLE_LENGTH / 2.0 + CUSHION_THICKNESS;
-    (hit.x.abs() <= hw && hit.z.abs() <= hl).then_some(hit)
-}
-
-/// Virtual-cone distance for rotation sensitivity when the cursor is *not*
-/// on the table: depends only on how steeply the cursor ray points
-/// downward, not on what it actually hits. Shallow angles (pointing toward
-/// the horizon or background — "aiming at nothing") give a large distance
-/// and slow rotation; steeper angles give a smaller one.
-fn cursor_cone_distance(rl: &RaylibHandle, camera: Camera3D) -> f32 {
-    let ray = rl.get_screen_to_world_ray(rl.get_mouse_position(), camera);
-    let downness = (-ray.direction.y).max(0.01);
-    (ROTATE_CONE_HEIGHT / downness).clamp(ROTATE_MIN_DIST, ROTATE_VIRTUAL_MAX_DIST)
+/// Orbit-drag sensitivity, scaled by how close the cursor is (on screen) to
+/// the object ball: right on top of it gives `ROTATE_MIN_SENSITIVITY_SCALE`
+/// of full speed for precise aiming, ramping linearly up to full speed by
+/// `ROTATE_PRECISION_RADIUS_PX` pixels away and staying there beyond that.
+fn rotate_sensitivity(rl: &RaylibHandle, camera: Camera3D, object_ball_pos: Vector3) -> f32 {
+    let ball_screen = rl.get_world_to_screen(object_ball_pos, camera);
+    let screen_dist = rl.get_mouse_position().distance(ball_screen);
+    let t = (screen_dist / ROTATE_PRECISION_RADIUS_PX).clamp(0.0, 1.0);
+    let scale = ROTATE_MIN_SENSITIVITY_SCALE + (1.0 - ROTATE_MIN_SENSITIVITY_SCALE) * t;
+    ROTATE_SENSITIVITY * scale
 }
 
 fn point_in_rect(px: f32, py: f32, x: i32, y: i32, w: i32, h: i32) -> bool {
@@ -1811,18 +1798,7 @@ fn main() {
                 // and the browser's synthesized mouse position (tracking
                 // just the first finger) would otherwise fight the pinch.
                 let delta = rl.get_mouse_delta();
-                // On the table: real distance to the point under the cursor.
-                // Off the table: the virtual cone (angle-only, continuous —
-                // no fixed number, no discontinuity at the table's edge).
-                let cursor_dist = cursor_on_table_point(&rl, camera)
-                    .map(|hit| {
-                        camera
-                            .position
-                            .distance(hit)
-                            .clamp(ROTATE_MIN_DIST, ROTATE_VIRTUAL_MAX_DIST)
-                    })
-                    .unwrap_or_else(|| cursor_cone_distance(&rl, camera));
-                let sensitivity = ROTATE_SENSITIVITY * (ROTATE_REFERENCE_DISTANCE / cursor_dist);
+                let sensitivity = rotate_sensitivity(&rl, camera, object_ball_pos);
                 camera.yaw(-delta.x * sensitivity, true);
                 camera.pitch(-delta.y * sensitivity, true, true, false);
             }
