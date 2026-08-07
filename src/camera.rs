@@ -40,7 +40,7 @@ pub const CAMERA_POT_LINE_BACK_DISTANCE: f32 = 1.7;
 // zone; vertical position isn't tied to that motion the same way.
 pub const ROTATE_SENSITIVITY: f32 = 0.005; // radians per pixel, at full speed
 pub const ROTATE_PRECISION_RADIUS_PX: f32 = 160.0;
-pub const ROTATE_MIN_SENSITIVITY_SCALE: f32 = 0.04; // fraction of full speed right on the ball
+pub const ROTATE_MIN_SENSITIVITY_SCALE: f32 = 0.02; // fraction of full speed right on the ball
 
 /// Horizontal (table-plane) unit vector along the camera's own look
 /// direction (target − position) — i.e. the direction the cue ball travels

@@ -197,7 +197,7 @@ pub const SKY_MODEL_PATH: &str = "assets/sky.glb";
 // Overhead LED light bank: a row of wide rectangular panels, like the
 // segmented shade units over a real snooker table, rather than one point.
 pub const LIGHT_PANEL_COUNT: usize = 3;
-pub const LIGHT_HEIGHT: f32 = 1.0;
+pub const LIGHT_HEIGHT: f32 = 2.0; // 2x the table -> light distance (was 1.0)
 pub const LIGHT_PANEL_WIDTH: f32 = TABLE_WIDTH * 0.65;
 pub const LIGHT_PANEL_THICKNESS: f32 = 0.04;
 pub const LIGHT_PANEL_GAP: f32 = 0.08;
