@@ -224,12 +224,12 @@ with open(OUT, "w") as f:
         "\n"
         "// Long rails (left/right): [z, abs_x].\n"
     )
-    f.write("const CUSHION_BOUNDARY: &[[f32; 2]] = &[\n")
+    f.write("pub const CUSHION_BOUNDARY: &[[f32; 2]] = &[\n")
     for along, out in long_rail:
         f.write(f"    [{along:.4}, {out:.4}],\n")
     f.write("];\n\n")
     f.write("// Short rails (baulk/top): [x, abs_z].\n")
-    f.write("const SHORT_RAIL_BOUNDARY: &[[f32; 2]] = &[\n")
+    f.write("pub const SHORT_RAIL_BOUNDARY: &[[f32; 2]] = &[\n")
     for along, out in short_rail:
         f.write(f"    [{along:.4}, {out:.4}],\n")
     f.write("];\n")

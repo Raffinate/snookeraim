@@ -6,7 +6,7 @@
 // an abs_* coordinate. Piecewise linear between points.
 
 // Long rails (left/right): [z, abs_x].
-const CUSHION_BOUNDARY: &[[f32; 2]] = &[
+pub const CUSHION_BOUNDARY: &[[f32; 2]] = &[
     [0.052, 0.8865],
     [0.053, 0.8867],
     [0.054, 0.8823],
@@ -43,7 +43,7 @@ const CUSHION_BOUNDARY: &[[f32; 2]] = &[
 ];
 
 // Short rails (baulk/top): [x, abs_z].
-const SHORT_RAIL_BOUNDARY: &[[f32; 2]] = &[
+pub const SHORT_RAIL_BOUNDARY: &[[f32; 2]] = &[
     [0.722, 1.726],
     [0.733, 1.727],
     [0.744, 1.729],
