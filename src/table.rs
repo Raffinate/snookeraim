@@ -184,6 +184,16 @@ pub const GALLERY_MODEL_OFFSET_X: f32 = -4.868618;
 pub const GALLERY_MODEL_OFFSET_Y: f32 = -0.8697;
 pub const GALLERY_MODEL_OFFSET_Z: f32 = 7.451210;
 
+// Sky backdrop ("free_-_skybox_anime_sky", downloaded separately) so the
+// gallery's windows show a bright daytime sky instead of the near-black
+// clear-color -- a single sphere of radius 500, already centered on the
+// origin, so no offset is needed. It's drawn unlit (no shader assigned, see
+// Assets::load) since a skybox shouldn't respond to the table's overhead
+// lights, and like the gallery its interior-facing normals need back-face
+// culling disabled to render from inside.
+pub const USE_SKY_MODEL: bool = true;
+pub const SKY_MODEL_PATH: &str = "assets/sky.glb";
+
 // Overhead LED light bank: a row of wide rectangular panels, like the
 // segmented shade units over a real snooker table, rather than one point.
 pub const LIGHT_PANEL_COUNT: usize = 3;

@@ -9,11 +9,15 @@ rand = "0.10.2"
 # macOS/desktop has no native GLES driver, so only request GLES 3.0 (WebGL2,
 # via the opengl_es_30 -> raylib-sys feature) for the Emscripten/web target;
 # desktop keeps raylib's default (desktop GL 3.3).
+#
+# SUPPORT_FILEFORMAT_JPG is off in raylib's own default config (see
+# vendor/raylib-sys-6.0.0/raylib/src/config.h) -- needed because
+# assets/sky.glb embeds its texture as JPEG.
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
-raylib = "6.0.0"
+raylib = { version = "6.0.0", features = ["SUPPORT_FILEFORMAT_JPG"] }
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
-raylib = { version = "6.0.0", features = ["opengl_es_30"] }
+raylib = { version = "6.0.0", features = ["opengl_es_30", "SUPPORT_FILEFORMAT_JPG"] }
 
 # raylib-sys 6.0.0's opengl_es_30 feature unconditionally links native-Linux
 # GLESv2/GLdispatch libraries, which don't exist (and aren't needed) when

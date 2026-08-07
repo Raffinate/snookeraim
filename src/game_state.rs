@@ -19,7 +19,7 @@ use crate::table::{
     CUE_BALL_MESH_INDEX, CUE_BALL_MODEL_CENTER, GALLERY_MODEL_OFFSET_X, GALLERY_MODEL_OFFSET_Y,
     GALLERY_MODEL_OFFSET_Z, OBJECT_BALL_COLOR, RED_BALL_MESH_INDEX, RED_BALL_MODEL_CENTER,
     TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z, USE_GALLERY_MODEL,
-    USE_MODEL_PROPS, USE_TABLE_MODEL,
+    USE_MODEL_PROPS, USE_SKY_MODEL, USE_TABLE_MODEL,
 };
 use crate::touch_ui::{opt_hit, TouchUi, HELP_BG};
 
@@ -399,6 +399,16 @@ impl GameState {
         } else {
             Color::WHITE
         };
+
+        if USE_SKY_MODEL {
+            // Same interior-facing-normals situation as the gallery room
+            // below (we're always inside this 500m sphere), plus it's drawn
+            // unlit (no custom shader assigned, see Assets::load) so it
+            // reads as a bright sky regardless of the table's light rig.
+            d3.rl_disable_backface_culling();
+            d3.draw_model(&assets.sky_model, Vector3::zero(), 1.0, Color::WHITE);
+            d3.rl_enable_backface_culling();
+        }
 
         if USE_GALLERY_MODEL {
             // The source model's floor/ceiling/wall meshes weren't authored
