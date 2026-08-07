@@ -52,10 +52,34 @@ pub struct GameState {
     pub(crate) pinch_prev_dist: Option<f32>,
 }
 
+/// How far off dead-on-target a fresh layout's initial cue aim starts,
+/// so it isn't already perfectly lined up before the player touches
+/// anything.
+const INITIAL_AIM_JITTER_DEG: f32 = 5.0;
+
+/// Builds the default camera for a fresh layout: aiming_camera's bearing
+/// (dead-on at the object ball), nudged by a small random yaw so the
+/// initial cue direction isn't already perfectly on target, then
+/// repositioned into the preset-2 (STAND) stance.
+fn default_aim_camera(cue_ball_pos: Vector3, object_ball_pos: Vector3) -> Camera3D {
+    let mut camera = aiming_camera(cue_ball_pos, object_ball_pos);
+    let jitter_deg = rand::random_range(-INITIAL_AIM_JITTER_DEG..INITIAL_AIM_JITTER_DEG);
+    camera.yaw(jitter_deg.to_radians(), true);
+    apply_aim_stance(
+        &mut camera,
+        cue_ball_pos,
+        object_ball_pos,
+        CAMERA_STANCE_BACK_DISTANCE,
+        CAMERA_STANCE_ELEVATION_DEG,
+        CAMERA_STANCE_LATERAL_OFFSET,
+    );
+    camera
+}
+
 impl GameState {
     pub fn new(pockets: &[Pocket]) -> GameState {
         let (cue_ball_pos, object_ball_pos) = random_shot_setup(pockets);
-        let camera = aiming_camera(cue_ball_pos, object_ball_pos);
+        let camera = default_aim_camera(cue_ball_pos, object_ball_pos);
         let (pocket_idx, _, _) = best_pocket(pockets, cue_ball_pos, object_ball_pos);
         GameState {
             camera,
@@ -278,7 +302,7 @@ impl GameState {
                 let (pocket_idx, _, _) =
                     best_pocket(pockets, self.cue_ball_pos, self.object_ball_pos);
                 self.target_pocket = pocket_idx;
-                self.camera = aiming_camera(self.cue_ball_pos, self.object_ball_pos);
+                self.camera = default_aim_camera(self.cue_ball_pos, self.object_ball_pos);
                 self.view_mode = false;
                 self.saved_camera = None;
                 self.last_view_camera = None;
