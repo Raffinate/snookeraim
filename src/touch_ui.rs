@@ -12,9 +12,14 @@ const BTN_MARGIN_BASE: i32 = 14;
 const BTN_FONT_BASE: i32 = 16;
 const BTN_FONT_MIN: i32 = 10;
 const UI_MIN_SCALE: f32 = 0.55;
-const BTN_FILL: Color = Color::new(255, 255, 255, 40);
-const BTN_FILL_ACTIVE: Color = Color::new(255, 220, 40, 90);
-const BTN_BORDER: Color = Color::new(255, 255, 255, 160);
+// Dark, fairly opaque fill (not the light near-transparent white this used
+// to be) so the white text stays readable against any backdrop -- the
+// white gallery room made a white-tinted, low-alpha button nearly
+// invisible, with almost no contrast for its own white text.
+const BTN_FILL: Color = Color::new(20, 20, 20, 150);
+const BTN_FILL_HOVER: Color = Color::new(60, 60, 60, 170);
+const BTN_FILL_ACTIVE: Color = Color::new(255, 200, 30, 210);
+const BTN_BORDER: Color = Color::new(0, 0, 0, 180);
 const BTN_TEXT: Color = Color::WHITE;
 pub const HELP_BG: Color = Color::new(0, 0, 0, 190);
 
@@ -48,7 +53,7 @@ impl Btn {
         let fill = if active {
             BTN_FILL_ACTIVE
         } else if hovered {
-            Color::new(255, 255, 255, 70)
+            BTN_FILL_HOVER
         } else {
             BTN_FILL
         };
