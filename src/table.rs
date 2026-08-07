@@ -162,6 +162,28 @@ pub const RED_BALL_MODEL_CENTER: Vector3 = Vector3 { x: 0.10001251, y: 0.8956615
 pub const CUE_BALL_COLOR: Color = Color::WHITE;
 pub const OBJECT_BALL_COLOR: Color = Color::new(200, 30, 30, 255); // red ball
 
+// Room backdrop so the table doesn't render in empty space ("abandoned VR
+// gallery" -- downloaded separately, not part of this repo's other assets).
+// Measured its two meshes' (RoomBaked/PropsBaked) glTF node bounding boxes
+// directly: floor sits at local Y 0, and the room spans X [0, 9.8] / Z
+// [-15, 0.1] (not centered on its own origin) -- the X/Z offsets recenter
+// it under the table.
+//
+// The Y offset is *not* 0, even though the room's floor is already at its
+// own local 0: world Y 0 is the table's *cloth* height (every game-logic
+// coordinate assumes that), not the floor the table's legs stand on. The
+// table model's own lowest point (its feet, checked directly against
+// snooker_table.glb) sits at local Y ~0, and TABLE_MODEL_OFFSET_Y is
+// -0.8697 (measured from the Baize/cloth mesh, see below) -- so in world
+// space the feet actually rest at Y ~-0.87, not Y 0. The room's floor has
+// to line up with that, or the table looks like it's sunk into the floor
+// up to the cloth.
+pub const USE_GALLERY_MODEL: bool = true;
+pub const GALLERY_MODEL_PATH: &str = "assets/gallery.glb";
+pub const GALLERY_MODEL_OFFSET_X: f32 = -4.868618;
+pub const GALLERY_MODEL_OFFSET_Y: f32 = -0.8697;
+pub const GALLERY_MODEL_OFFSET_Z: f32 = 7.451210;
+
 // Overhead LED light bank: a row of wide rectangular panels, like the
 // segmented shade units over a real snooker table, rather than one point.
 pub const LIGHT_PANEL_COUNT: usize = 3;

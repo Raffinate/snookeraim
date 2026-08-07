@@ -16,8 +16,9 @@ use crate::shot::{
 };
 use crate::table::{
     draw_ball_collision_ring, draw_light_fixture, draw_table, Pocket, CUE_BALL_COLOR,
-    CUE_BALL_MESH_INDEX, CUE_BALL_MODEL_CENTER, OBJECT_BALL_COLOR, RED_BALL_MESH_INDEX,
-    RED_BALL_MODEL_CENTER, TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z,
+    CUE_BALL_MESH_INDEX, CUE_BALL_MODEL_CENTER, GALLERY_MODEL_OFFSET_X, GALLERY_MODEL_OFFSET_Y,
+    GALLERY_MODEL_OFFSET_Z, OBJECT_BALL_COLOR, RED_BALL_MESH_INDEX, RED_BALL_MODEL_CENTER,
+    TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z, USE_GALLERY_MODEL,
     USE_MODEL_PROPS, USE_TABLE_MODEL,
 };
 use crate::touch_ui::{opt_hit, TouchUi, HELP_BG};
@@ -389,7 +390,7 @@ impl GameState {
     /// The full 3D scene: table, lights, collision-debug overlay, both
     /// balls, cue, ghost ball + aim line, gate, and any frozen shot-test
     /// paths.
-    pub fn draw_scene(&self, d3: &mut impl RaylibDraw3D, assets: &mut Assets, shot_dir: Option<(f32, f32)>) {
+    pub fn draw_scene(&self, d3: &mut (impl RaylibDraw3D + RaylibRlgl), assets: &mut Assets, shot_dir: Option<(f32, f32)>) {
         // A bit see-through in collision-debug mode so the boundary lines
         // and ball collision circles (both drawn on top) aren't hidden
         // behind the real geometry they're describing.
@@ -398,6 +399,19 @@ impl GameState {
         } else {
             Color::WHITE
         };
+
+        if USE_GALLERY_MODEL {
+            // The source model's floor/ceiling/wall meshes weren't authored
+            // double-sided and (unlike the table/cue/ball props, which were
+            // always meant to be viewed from outside) this room is viewed
+            // from *inside* it, where those single-sided normals face away
+            // from the camera and get back-face culled -- disable culling
+            // for just this draw so both faces of every triangle render.
+            let offset = Vector3::new(GALLERY_MODEL_OFFSET_X, GALLERY_MODEL_OFFSET_Y, GALLERY_MODEL_OFFSET_Z);
+            d3.rl_disable_backface_culling();
+            d3.draw_model(&assets.gallery_model, offset, 1.0, Color::WHITE);
+            d3.rl_enable_backface_culling();
+        }
 
         if USE_TABLE_MODEL {
             let offset = Vector3::new(TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z);

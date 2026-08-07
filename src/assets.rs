@@ -3,8 +3,8 @@ use raylib::prelude::*;
 use crate::cue::CUE_MODEL_PATH;
 use crate::shaders::{BALL_FS, BALL_VS, GHOST_FS, TABLE_FS};
 use crate::table::{
-    self, BALLS_MODEL_PATH, BALL_RADIUS, LIGHT_COLOR_INTENSITY, LIGHT_PANEL_COUNT,
-    TABLE_MODEL_PATH,
+    self, BALLS_MODEL_PATH, BALL_RADIUS, GALLERY_MODEL_PATH, LIGHT_COLOR_INTENSITY,
+    LIGHT_PANEL_COUNT, TABLE_MODEL_PATH,
 };
 
 /// Everything loaded once at startup and read-only afterward: GPU resources
@@ -20,6 +20,7 @@ pub struct Assets {
     pub table_model: Model,
     pub cue_model: Model,
     pub balls_model: Model,
+    pub gallery_model: Model,
     view_pos_loc: i32,
     ghost_view_pos_loc: i32,
     table_view_pos_loc: i32,
@@ -94,6 +95,13 @@ impl Assets {
             material.set_shader(&table_shader);
         }
 
+        let mut gallery_model = rl
+            .load_model(thread, GALLERY_MODEL_PATH)
+            .expect("failed to load assets/gallery.glb");
+        for material in gallery_model.materials_mut() {
+            material.set_shader(&table_shader);
+        }
+
         Assets {
             ball_mesh,
             ball_shader,
@@ -104,6 +112,7 @@ impl Assets {
             table_model,
             cue_model,
             balls_model,
+            gallery_model,
             view_pos_loc,
             ghost_view_pos_loc,
             table_view_pos_loc,
