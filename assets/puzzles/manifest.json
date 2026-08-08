@@ -1,0 +1,6 @@
+{
+  "sets": [
+    { "id": "blue_spot_cuts", "file": "blue_spot_cuts.json" },
+    { "id": "baulk_corner_practice", "file": "baulk_corner_practice.json" }
+  ]
+}

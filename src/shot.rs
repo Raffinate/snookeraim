@@ -15,6 +15,12 @@ pub const GATE_MISS_COLOR: Color = Color::new(220, 50, 50, 255);
 pub const PATH_WHITE_COLOR: Color = Color::new(255, 255, 255, 110);
 pub const PATH_RED_COLOR: Color = Color::new(230, 60, 60, 110);
 
+/// Beyond this cut angle a pot is treated as physically impossible, not
+/// just difficult -- `best_pocket`'s own ceiling for "give up and fall back
+/// to the nearest pocket", also reused by puzzle.rs when deciding whether
+/// a grid-sampled placement is even a legal shot.
+pub const MAX_REACHABLE_CUT_DEG: f32 = 80.0;
+
 pub fn cross2(a: (f32, f32), b: (f32, f32)) -> f32 {
     a.0 * b.1 - a.1 * b.0
 }
@@ -120,7 +126,7 @@ pub fn best_pocket(
     }
 
     match best {
-        Some((i, angle, dir)) if angle <= 80f32.to_radians() => (i, dir, angle),
+        Some((i, angle, dir)) if angle <= MAX_REACHABLE_CUT_DEG.to_radians() => (i, dir, angle),
         _ => {
             let (i, _, dir) = nearest.unwrap_or((0, 0.0, (0.0, 1.0)));
             let angle = best.map_or(f32::INFINITY, |(_, a, _)| a);

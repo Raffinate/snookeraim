@@ -1,6 +1,8 @@
 use raylib::prelude::*;
 
 use crate::cue::CUE_MODEL_PATH;
+use crate::grid::GridSpec;
+use crate::puzzle::{self, PuzzleSet, PUZZLES_DIR};
 use crate::shaders::{BALL_FS, BALL_VS, GHOST_FS, TABLE_FS};
 use crate::table::{
     self, BALLS_MODEL_PATH, BALL_RADIUS, GALLERY_MODEL_PATH, LIGHT_COLOR_INTENSITY,
@@ -27,6 +29,8 @@ pub struct Assets {
     table_view_pos_loc: i32,
     pub light_panels: [Vector3; LIGHT_PANEL_COUNT],
     pub pockets: Vec<table::Pocket>,
+    pub grid: GridSpec,
+    pub puzzle_sets: Vec<PuzzleSet>,
 }
 
 impl Assets {
@@ -112,6 +116,9 @@ impl Assets {
             .load_model(thread, SKY_MODEL_PATH)
             .expect("failed to load assets/sky.glb");
 
+        let grid = GridSpec::build();
+        let puzzle_sets = puzzle::load_all(PUZZLES_DIR, &grid);
+
         Assets {
             ball_mesh,
             ball_shader,
@@ -129,6 +136,8 @@ impl Assets {
             table_view_pos_loc,
             light_panels,
             pockets,
+            grid,
+            puzzle_sets,
         }
     }
 

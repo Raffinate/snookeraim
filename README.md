@@ -36,7 +36,9 @@ top-right) render on every platform, not just touch devices.
 | `H` | `AIM` | Toggle the object-ball aim line (only while the ghost ball is shown) |
 | `Space` | `HIT` | Test the current aim: trace both balls' paths, evaluate the pot |
 | `R` | `CLEAR` / `NEXT` | Clear a tested shot's paths, or (if none showing) reposition both balls |
+| `N` | `NEXT EX` | (only while a puzzle set is active) Advance to the next exercise |
 | `?` | `?` | Toggle a help popup listing all of the above |
+| `Esc` | — | Pause menu: Continue, Puzzles (see below), Quit (native only) |
 
 The window (and, on the web build, the browser canvas) is resizable —
 both the 3D view and the on-screen controls adapt to the current
@@ -115,6 +117,47 @@ rerolled (up to 300 attempts) until the two balls have reasonable
 separation *and* the best available pocket offers a cut angle of 65° or
 less — otherwise every layout would technically be a "shot" but plenty of
 them would be near-impossible slivers.
+
+**Puzzle exercise sets let you drill a specific class of shot, on top of
+the same free-random play above.** Open the pause menu (`Esc`) →
+`PUZZLES` to pick a set; `FREE PRACTICE` in that same menu drops back to
+ordinary free-random layouts. While a set is active, `R`/`CLEAR`-`NEXT`
+reshuffles the *current* exercise (a fresh draw from the same grid range,
+so you get another angle at the same drill) instead of a free-random
+layout; moving on to a *different* exercise in the set is the separate
+`N`/`NEXT EX` control.
+
+Under the hood, both balls are placed on one shared table-wide grid
+(`src/grid.rs`) rather than anywhere on the table: the six standard
+colour-ball spots (baulk-line yellow/green/brown, center-spot blue,
+pyramid-spot pink, black), computed from this project's own real table
+dimensions per the official markings, are exact members of that grid, so
+exercise authors have fixed, meaningful reference points instead of raw
+coordinates. Puzzle-set content is plain JSON under `assets/puzzles/`
+(bundled the same way the `.glb` models are, via the Makefile's
+`--preload-file`, so no build changes are needed to add more), listed in
+`manifest.json` and loaded once at startup:
+
+```json
+{
+  "id": "blue_spot_cuts",
+  "name": "Blue Spot Cuts",
+  "exercises": [
+    {
+      "label": "Cut from the left",
+      "object_ball": { "row": [6, 6], "col": [5, 5] },
+      "cue_ball": { "row": [5, 7], "col": [0, 2] }
+    }
+  ]
+}
+```
+
+`row`/`col` are inclusive index ranges into the grid's Z/X axes; a fixed
+cell is `min == max`. Loading an exercise samples a uniformly random cell
+within each range (rerolled until both balls clear the cushions/pockets,
+keep their minimum separation, and leave at least one pocket reachable),
+so a wide `cue_ball` range with a pinned single-cell `object_ball` is the
+usual shape: one real-world spot, many practice angles.
 
 **Lighting is a small hand-rolled Blinn-Phong shader**, not raylib's
 default flat-shaded primitives (`DrawSphere` etc. have no lighting at

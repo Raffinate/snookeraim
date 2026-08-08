@@ -10,6 +10,7 @@ use crate::camera::{
 };
 use crate::cue::{draw_cue, draw_cue_model};
 use crate::cushion_segments::{CUSHION_BOUNDARY, SHORT_RAIL_BOUNDARY};
+use crate::puzzle::sample_exercise;
 use crate::shot::{
     best_pocket, cue_raycast, draw_gate, draw_object_ball_aim_line, draw_path_stripe,
     random_shot_setup, test_shot, ShotTest, GATE_MISS_COLOR, GATE_NEUTRAL_COLOR, GATE_SUCCESS_COLOR,
@@ -22,7 +23,7 @@ use crate::table::{
     TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z, USE_GALLERY_MODEL,
     USE_MODEL_PROPS, USE_SKY_MODEL, USE_TABLE_MODEL,
 };
-use crate::touch_ui::{opt_hit, MenuUi, TouchUi, HELP_BG};
+use crate::touch_ui::{opt_hit, MenuUi, PuzzleMenuUi, TouchUi, HELP_BG};
 
 /// `draw_mesh` consumes its material by value; this hands it a throwaway
 /// non-owning copy so the real material survives to the next frame.
@@ -53,6 +54,11 @@ pub struct GameState {
     pub(crate) pinch_prev_dist: Option<f32>,
     pub(crate) menu_visible: bool,
     pub(crate) quit_requested: bool,
+    // Index into `Assets.puzzle_sets`; `None` means ordinary free-random
+    // play. Selected from the PUZZLES submenu (see `handle_puzzle_menu`).
+    pub(crate) active_set: Option<usize>,
+    pub(crate) active_exercise: usize,
+    pub(crate) puzzle_menu_visible: bool,
 }
 
 /// How far off dead-on-target a fresh layout's initial cue aim starts,
@@ -102,7 +108,50 @@ impl GameState {
             pinch_prev_dist: None,
             menu_visible: false,
             quit_requested: false,
+            active_set: None,
+            active_exercise: 0,
+            puzzle_menu_visible: false,
         }
+    }
+
+    /// Common bookkeeping for dropping in a freshly generated (cue, object)
+    /// ball pair -- shared by R's free-random reroll (`handle_reset_and_
+    /// toggles`) and by loading a puzzle exercise (`load_active_exercise`),
+    /// so both apply the same camera reset / view-mode clear.
+    fn apply_new_layout(&mut self, cue_ball_pos: Vector3, object_ball_pos: Vector3, pockets: &[Pocket]) {
+        self.cue_ball_pos = cue_ball_pos;
+        self.object_ball_pos = object_ball_pos;
+        let (pocket_idx, _, _) = best_pocket(pockets, cue_ball_pos, object_ball_pos);
+        self.target_pocket = pocket_idx;
+        self.camera = default_aim_camera(cue_ball_pos, object_ball_pos);
+        self.view_mode = false;
+        self.saved_camera = None;
+        self.last_view_camera = None;
+        self.shot_test = None;
+    }
+
+    /// Samples the current `active_exercise` of `active_set` (if any) and
+    /// applies it via `apply_new_layout`. No-op when no set is active.
+    fn load_active_exercise(&mut self, assets: &Assets) {
+        if let Some(set_idx) = self.active_set {
+            let exercise = &assets.puzzle_sets[set_idx].exercises[self.active_exercise];
+            let (cue_ball_pos, object_ball_pos) = sample_exercise(exercise, &assets.grid, &assets.pockets);
+            self.apply_new_layout(cue_ball_pos, object_ball_pos, &assets.pockets);
+        }
+    }
+
+    /// Status line for the active puzzle exercise, if any -- shown in
+    /// `draw_overlay` next to the VIEW MODE label.
+    pub fn puzzle_status_text(&self, assets: &Assets) -> Option<String> {
+        let set_idx = self.active_set?;
+        let set = &assets.puzzle_sets[set_idx];
+        let exercise = &set.exercises[self.active_exercise];
+        let mut text =
+            format!("Puzzle: {} - Exercise {}/{}", set.name, self.active_exercise + 1, set.exercises.len());
+        if let Some(label) = &exercise.label {
+            text.push_str(&format!(" ({label})"));
+        }
+        Some(text)
     }
 
     /// While in view mode, the cue's aim stays frozen at whatever it was
@@ -132,9 +181,11 @@ impl GameState {
     /// Shift+`\`` toggles the collision-debug overlay; `?`/the help button
     /// toggles the help popup, and any other tap while it's open dismisses
     /// it (the help button itself is excluded by the branch above). Esc
-    /// closes the help popup if it's open, otherwise toggles the pause
-    /// menu -- raylib's default exit-on-Esc is disabled in `main` so this
-    /// is the only thing Esc does (see `handle_menu` for Continue/Quit).
+    /// closes whichever popup is topmost (help, then the PUZZLES submenu,
+    /// then the pause menu itself), otherwise opens the pause menu --
+    /// raylib's default exit-on-Esc is disabled in `main` so this is the
+    /// only thing Esc does (see `handle_menu` for Continue/Quit/Puzzles,
+    /// `handle_puzzle_menu` for the submenu).
     pub fn handle_global_toggles(&mut self, rl: &RaylibHandle, ui: &TouchUi, mouse: Vector2, tap: bool) {
         if rl.is_key_pressed(KeyboardKey::KEY_GRAVE)
             && (rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
@@ -146,13 +197,15 @@ impl GameState {
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
             if self.help_visible {
                 self.help_visible = false;
+            } else if self.puzzle_menu_visible {
+                self.puzzle_menu_visible = false;
             } else {
                 self.menu_visible = !self.menu_visible;
             }
             return;
         }
 
-        if self.menu_visible {
+        if self.menu_visible || self.puzzle_menu_visible {
             return;
         }
 
@@ -163,17 +216,40 @@ impl GameState {
         }
     }
 
-    /// CONTINUE closes the pause menu; QUIT (native builds only) requests
-    /// the main loop exit. Only reacts while the menu is actually open, so
-    /// it's safe to call unconditionally every frame.
+    /// CONTINUE closes the pause menu; PUZZLES swaps to the puzzle-set
+    /// picker (see `handle_puzzle_menu`); QUIT (native builds only)
+    /// requests the main loop exit. Only reacts while the menu is actually
+    /// open, so it's safe to call unconditionally every frame.
     pub fn handle_menu(&mut self, menu: &MenuUi, mouse: Vector2, tap: bool) {
         if !self.menu_visible || !tap {
             return;
         }
         if menu.continue_btn.hit(mouse) {
             self.menu_visible = false;
+        } else if menu.puzzles_btn.hit(mouse) {
+            self.menu_visible = false;
+            self.puzzle_menu_visible = true;
         } else if opt_hit(&menu.quit_btn, mouse) {
             self.quit_requested = true;
+        }
+    }
+
+    /// The PUZZLES submenu (opened from the pause menu): FREE PRACTICE
+    /// drops back to ordinary free-random play; tapping a set loads its
+    /// first exercise via `load_active_exercise`. Either closes the
+    /// submenu back to gameplay.
+    pub fn handle_puzzle_menu(&mut self, menu: &PuzzleMenuUi, mouse: Vector2, tap: bool, assets: &Assets) {
+        if !self.puzzle_menu_visible || !tap {
+            return;
+        }
+        if menu.free_practice_btn.hit(mouse) {
+            self.active_set = None;
+            self.puzzle_menu_visible = false;
+        } else if let Some(set_idx) = menu.hit_set(mouse) {
+            self.active_set = Some(set_idx);
+            self.active_exercise = 0;
+            self.load_active_exercise(assets);
+            self.puzzle_menu_visible = false;
         }
     }
 
@@ -325,14 +401,18 @@ impl GameState {
     }
 
     /// The expand/collapse toggle, reset/next-layout, re-center, view-mode
-    /// toggle, and ghost-ball/aim-line toggles.
+    /// toggle, ghost-ball/aim-line toggles, and (only while a puzzle set is
+    /// active) advancing to its next exercise. `R`/reset reshuffles the
+    /// *current* exercise while a set is active (same grid range, fresh
+    /// draw) rather than free-random -- moving to a *different* exercise is
+    /// the dedicated, separate `N`/NEXT EX control below.
     pub fn handle_reset_and_toggles(
         &mut self,
         rl: &RaylibHandle,
         ui: &TouchUi,
         mouse: Vector2,
         tap: bool,
-        pockets: &[Pocket],
+        assets: &Assets,
     ) {
         if tap && ui.expand_toggle.hit(mouse) {
             self.ghost_aim_visible = !self.ghost_aim_visible;
@@ -344,15 +424,25 @@ impl GameState {
                 // just clears that, rather than jumping straight to a new
                 // layout.
                 self.shot_test = None;
+            } else if self.active_set.is_some() {
+                // A puzzle set is active: R reshuffles the *current*
+                // exercise (a fresh draw from the same grid range) rather
+                // than jumping to an unrelated free-random layout, which
+                // would otherwise leave the "Puzzle: ..." overlay label
+                // disagreeing with what's actually on the table. Moving to
+                // a different exercise is `N`'s job (see below).
+                self.load_active_exercise(assets);
             } else {
-                (self.cue_ball_pos, self.object_ball_pos) = random_shot_setup(pockets);
-                let (pocket_idx, _, _) =
-                    best_pocket(pockets, self.cue_ball_pos, self.object_ball_pos);
-                self.target_pocket = pocket_idx;
-                self.camera = default_aim_camera(self.cue_ball_pos, self.object_ball_pos);
-                self.view_mode = false;
-                self.saved_camera = None;
-                self.last_view_camera = None;
+                let (cue_ball_pos, object_ball_pos) = random_shot_setup(&assets.pockets);
+                self.apply_new_layout(cue_ball_pos, object_ball_pos, &assets.pockets);
+            }
+        }
+
+        if let Some(set_idx) = self.active_set {
+            if rl.is_key_pressed(KeyboardKey::KEY_N) || (tap && opt_hit(&ui.next_exercise, mouse)) {
+                let exercise_count = assets.puzzle_sets[set_idx].exercises.len();
+                self.active_exercise = (self.active_exercise + 1) % exercise_count;
+                self.load_active_exercise(assets);
             }
         }
 
@@ -675,22 +765,28 @@ impl GameState {
         }
     }
 
-    /// 2D overlay: FPS, the view-mode label, the last tested shot's
-    /// pot/miss marker, every on-screen control, and the help popup (when
-    /// open).
+    /// 2D overlay: FPS, the view-mode label, the active puzzle exercise's
+    /// status line, the last tested shot's pot/miss marker, every on-screen
+    /// control, and whichever popup (help, pause menu, puzzle picker) is
+    /// open.
     pub fn draw_overlay(
         &self,
         d: &mut RaylibDrawHandle,
         ui: &TouchUi,
         menu: &MenuUi,
+        puzzle_menu: &PuzzleMenuUi,
         mouse: Vector2,
         screen_w: i32,
         screen_h: i32,
         pot_marker: Option<(Vector2, bool)>,
+        puzzle_status: Option<&str>,
     ) {
         d.draw_fps(10, 10);
         if self.view_mode {
             d.draw_text("VIEW MODE (cue aim frozen)", 10, 36, 18, Color::YELLOW);
+        }
+        if let Some(status) = puzzle_status {
+            d.draw_text(status, 10, 60, 18, Color::YELLOW);
         }
 
         if let Some((screen_pos, potted)) = pot_marker {
@@ -723,6 +819,9 @@ impl GameState {
         if let Some(b) = &ui.aim {
             b.draw(d, mouse, self.show_aim_line);
         }
+        if let Some(b) = &ui.next_exercise {
+            b.draw(d, mouse, false);
+        }
         ui.close_stance.draw(d, mouse, false);
         ui.stand_stance.draw(d, mouse, false);
         ui.pot_line.draw(d, mouse, false);
@@ -751,9 +850,10 @@ impl GameState {
                 "H / AIM          toggle the object-ball aim line (needs ghost ball on)",
                 ">> / <<          show or hide the GHOST/AIM buttons",
                 "Space / HIT      test the current aim: trace both balls' paths",
-                "R / CLEAR-NEXT   clear a tested shot, or reposition both balls",
+                "R / CLEAR-NEXT   clear a tested shot, or reroll (same exercise if puzzle mode is on)",
+                "N / NEXT EX      (puzzle mode) advance to the next exercise",
                 "? / help button  toggle this popup",
-                "Esc              pause menu (continue / quit)",
+                "Esc              pause menu (continue / quit / puzzle sets)",
             ];
             let start_y = 90;
             let line_h = 26;
@@ -764,6 +864,9 @@ impl GameState {
 
         if self.menu_visible {
             menu.draw(d, mouse, screen_w, screen_h);
+        }
+        if self.puzzle_menu_visible {
+            puzzle_menu.draw(d, mouse, screen_w, screen_h, self.active_set);
         }
     }
 }

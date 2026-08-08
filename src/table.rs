@@ -222,11 +222,26 @@ pub fn pockets() -> Vec<Pocket> {
     ]
 }
 
+/// Whether a ball centered at `pos` clears both the cushions and every
+/// pocket mouth by the same "extra breathing room" margin `
+/// random_ball_position` uses (a full ball-width beyond the bare,
+/// model-measured cushion boundary) -- shared with any other ball-placement
+/// logic that needs the same "is this a legal resting spot" check (see
+/// puzzle.rs's grid-cell sampling).
+pub fn ball_position_clear(pos: Vector3, pockets: &[Pocket]) -> bool {
+    let clear_of_cushion = pos.x.abs() < safe_half_width(pos.z.abs()) - BALL_RADIUS
+        && pos.z.abs() < safe_half_length(pos.x.abs()) - BALL_RADIUS;
+    let clear_of_pockets = pockets
+        .iter()
+        .all(|p| pos.distance(p.position) > p.radius + BALL_RADIUS * 2.0);
+    clear_of_cushion && clear_of_pockets
+}
+
 /// Picks a random point on the playing surface that stays clear of the
 /// cushions and every pocket mouth, so balls never spawn half-sunk.
 pub fn random_ball_position(pockets: &[Pocket], taken: &[Vector3]) -> Vector3 {
     // Rough outer sampling box (cheap to draw from); the real boundary
-    // check below (safe_half_width, against the model's measured
+    // check inside ball_position_clear (against the model's measured
     // geometry) is what actually decides whether a candidate is accepted.
     let margin = BALL_RADIUS * 2.0;
     let hw = TABLE_WIDTH / 2.0 - margin;
@@ -237,16 +252,9 @@ pub fn random_ball_position(pockets: &[Pocket], taken: &[Vector3]) -> Vector3 {
         let z = rand::random_range(-hl..hl);
         let candidate = Vector3::new(x, BALL_RADIUS, z);
 
-        // Extra breathing room beyond bare wall clearance, same idea as the
-        // old flat `margin` above, but checked against the real cushion.
-        let clear_of_cushion = x.abs() < safe_half_width(z.abs()) - BALL_RADIUS
-            && z.abs() < safe_half_length(x.abs()) - BALL_RADIUS;
-        let clear_of_pockets = pockets
-            .iter()
-            .all(|p| candidate.distance(p.position) > p.radius + BALL_RADIUS * 2.0);
         let clear_of_balls = taken.iter().all(|b| candidate.distance(*b) > MIN_BALL_SEPARATION);
 
-        if clear_of_cushion && clear_of_pockets && clear_of_balls {
+        if ball_position_clear(candidate, pockets) && clear_of_balls {
             return candidate;
         }
     }

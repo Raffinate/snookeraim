@@ -35,13 +35,16 @@ pub struct Btn {
     y: i32,
     w: i32,
     h: i32,
-    label: &'static str,
+    label: String,
     font: i32,
 }
 
 impl Btn {
-    fn new(x: i32, y: i32, w: i32, h: i32, label: &'static str, font: i32) -> Self {
-        Btn { x, y, w, h, label, font }
+    // `impl Into<String>` (not just `&'static str`) so runtime-loaded
+    // labels -- e.g. a puzzle set's own display name -- work the same way
+    // as the plain string-literal labels every other button uses.
+    fn new(x: i32, y: i32, w: i32, h: i32, label: impl Into<String>, font: i32) -> Self {
+        Btn { x, y, w, h, label: label.into(), font }
     }
 
     pub fn hit(&self, mouse: Vector2) -> bool {
@@ -59,9 +62,9 @@ impl Btn {
         };
         d.draw_rectangle(self.x, self.y, self.w, self.h, fill);
         d.draw_rectangle_lines(self.x, self.y, self.w, self.h, BTN_BORDER);
-        let text_w = d.measure_text(self.label, self.font);
+        let text_w = d.measure_text(&self.label, self.font);
         d.draw_text(
-            self.label,
+            &self.label,
             self.x + (self.w - text_w) / 2,
             self.y + (self.h - self.font) / 2,
             self.font,
@@ -97,19 +100,24 @@ pub struct TouchUi {
     pub view: Btn,
     pub center: Btn,
     pub help: Btn,
+    // `None` while no puzzle set is active -- distinct from `reset`
+    // (R/CLEAR-NEXT), which keeps its free-random behavior unchanged
+    // whether or not a set is active (see game_state.rs).
+    pub next_exercise: Option<Btn>,
 }
 
 pub fn opt_hit(btn: &Option<Btn>, mouse: Vector2) -> bool {
     btn.as_ref().is_some_and(|b| b.hit(mouse))
 }
 
-/// The ESC pause menu: CONTINUE always, QUIT only on native builds. A web
-/// build runs inside a browser tab that the page itself has no way to
-/// close, so rather than show a QUIT button that can't actually do
-/// anything, it just doesn't exist there -- same `Option<Btn>` pattern as
-/// the collapsible GHOST/AIM buttons above.
+/// The ESC pause menu: CONTINUE and PUZZLES always, QUIT only on native
+/// builds. A web build runs inside a browser tab that the page itself has
+/// no way to close, so rather than show a QUIT button that can't actually
+/// do anything, it just doesn't exist there -- same `Option<Btn>` pattern
+/// as the collapsible GHOST/AIM buttons above.
 pub struct MenuUi {
     pub continue_btn: Btn,
+    pub puzzles_btn: Btn,
     pub quit_btn: Option<Btn>,
     title_y: i32,
 }
@@ -122,6 +130,7 @@ impl MenuUi {
         let title_w = d.measure_text(title, title_size);
         d.draw_text(title, screen_w / 2 - title_w / 2, self.title_y, title_size, Color::RAYWHITE);
         self.continue_btn.draw(d, mouse, false);
+        self.puzzles_btn.draw(d, mouse, false);
         if let Some(b) = &self.quit_btn {
             b.draw(d, mouse, false);
         }
@@ -139,19 +148,74 @@ pub fn menu_ui(screen_w: i32, screen_h: i32) -> MenuUi {
     #[cfg(not(target_os = "emscripten"))]
     let has_quit = true;
 
-    let rows = if has_quit { 2 } else { 1 };
+    let rows = if has_quit { 3 } else { 2 };
     let stack_h = rows * btn_h + (rows - 1) * gap;
     let x = screen_w / 2 - btn_w / 2;
     let start_y = screen_h / 2 - stack_h / 2;
 
     let continue_btn = Btn::new(x, start_y, btn_w, btn_h, "CONTINUE", font);
+    let puzzles_btn = Btn::new(x, start_y + btn_h + gap, btn_w, btn_h, "PUZZLES", font);
     let quit_btn = if has_quit {
-        Some(Btn::new(x, start_y + btn_h + gap, btn_w, btn_h, "QUIT", font))
+        Some(Btn::new(x, start_y + 2 * (btn_h + gap), btn_w, btn_h, "QUIT", font))
     } else {
         None
     };
 
-    MenuUi { continue_btn, quit_btn, title_y: start_y - 60 }
+    MenuUi { continue_btn, puzzles_btn, quit_btn, title_y: start_y - 60 }
+}
+
+/// The puzzle-set picker, opened from the pause menu's PUZZLES button: one
+/// row per loaded set (in the same order as `Assets.puzzle_sets`, so a hit
+/// index maps directly to it) plus a FREE PRACTICE row to drop back to the
+/// ordinary fully-random layout. Highlights whichever is currently active.
+pub struct PuzzleMenuUi {
+    pub set_buttons: Vec<Btn>,
+    pub free_practice_btn: Btn,
+    title_y: i32,
+}
+
+impl PuzzleMenuUi {
+    pub fn draw(&self, d: &mut RaylibDrawHandle, mouse: Vector2, screen_w: i32, screen_h: i32, active_set: Option<usize>) {
+        d.draw_rectangle(0, 0, screen_w, screen_h, HELP_BG);
+        let title = "PUZZLE SETS  (tap Esc to close)";
+        let title_size = 28;
+        let title_w = d.measure_text(title, title_size);
+        d.draw_text(title, screen_w / 2 - title_w / 2, self.title_y, title_size, Color::RAYWHITE);
+        self.free_practice_btn.draw(d, mouse, active_set.is_none());
+        for (i, btn) in self.set_buttons.iter().enumerate() {
+            btn.draw(d, mouse, active_set == Some(i));
+        }
+    }
+
+    /// Index into `set_buttons` (and thus `Assets.puzzle_sets`) of whichever
+    /// row was tapped, if any.
+    pub fn hit_set(&self, mouse: Vector2) -> Option<usize> {
+        self.set_buttons.iter().position(|b| b.hit(mouse))
+    }
+}
+
+pub fn puzzle_menu_ui(screen_w: i32, screen_h: i32, set_names: &[String]) -> PuzzleMenuUi {
+    let btn_w = 340;
+    let btn_h = 56;
+    let gap = 14;
+    let font = 20;
+
+    let rows = set_names.len() + 1; // + FREE PRACTICE
+    let stack_h = rows as i32 * btn_h + (rows as i32 - 1) * gap;
+    let x = screen_w / 2 - btn_w / 2;
+    let start_y = screen_h / 2 - stack_h / 2;
+
+    let free_practice_btn = Btn::new(x, start_y, btn_w, btn_h, "FREE PRACTICE", font);
+    let set_buttons = set_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let y = start_y + (i as i32 + 1) * (btn_h + gap);
+            Btn::new(x, y, btn_w, btn_h, name.clone(), font)
+        })
+        .collect();
+
+    PuzzleMenuUi { set_buttons, free_practice_btn, title_y: start_y - 60 }
 }
 
 impl TouchUi {
@@ -179,6 +243,7 @@ impl TouchUi {
         .any(|b| b.hit(mouse))
             || opt_hit(&self.ghost, mouse)
             || opt_hit(&self.aim, mouse)
+            || opt_hit(&self.next_exercise, mouse)
     }
 }
 
@@ -187,6 +252,7 @@ pub fn touch_ui(
     screen_h: i32,
     reset_label: &'static str,
     ghost_aim_visible: bool,
+    puzzle_active: bool,
 ) -> TouchUi {
     // Scale the whole control set down together so it always fits the
     // current screen without overlapping itself, with a floor so buttons
@@ -262,6 +328,18 @@ pub fn touch_ui(
         font,
     );
 
+    // Bottom-center, only while a puzzle set is active: advances to the
+    // next exercise in that set (see game_state.rs -- deliberately separate
+    // from `reset`, which keeps its ordinary free-random behavior
+    // unchanged either way). Sits in the gap between the bottom-left
+    // camera cluster and the bottom-right HIT square, which the width/
+    // height scaling above already keeps clear on any screen big enough
+    // to fit both of those.
+    let next_ex_w = 3 * btn + 2 * gap;
+    let next_exercise = puzzle_active.then(|| {
+        Btn::new(screen_w / 2 - next_ex_w / 2, row_bottom_y, next_ex_w, btn, "NEXT EX", font)
+    });
+
     // Top-right: help, with an expand/collapse toggle directly below it.
     // Reset sits to help's left, two squares wide so its "CLEAR"/"NEXT"
     // label has room to breathe, and its label reflects what pressing it
@@ -308,5 +386,6 @@ pub fn touch_ui(
         view,
         center,
         help,
+        next_exercise,
     }
 }

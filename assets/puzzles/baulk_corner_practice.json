@@ -1,0 +1,27 @@
+{
+  "id": "baulk_corner_practice",
+  "name": "Baulk Corner Practice",
+  "description": "Object ball on the baulk-line spots (brown/green/yellow), cue ball up-table -- classic corner-pocket practice from the D.",
+  "exercises": [
+    {
+      "label": "Brown, straight up-table",
+      "object_ball": { "row": [2, 2], "col": [5, 5] },
+      "cue_ball": { "row": [9, 12], "col": [4, 6] }
+    },
+    {
+      "label": "Green, cut toward the near corner",
+      "object_ball": { "row": [2, 2], "col": [3, 3] },
+      "cue_ball": { "row": [7, 10], "col": [6, 9] }
+    },
+    {
+      "label": "Yellow, cut toward the near corner",
+      "object_ball": { "row": [2, 2], "col": [7, 7] },
+      "cue_ball": { "row": [7, 10], "col": [1, 4] }
+    },
+    {
+      "label": "Brown, cut into a top corner",
+      "object_ball": { "row": [2, 2], "col": [5, 5] },
+      "cue_ball": { "row": [8, 11], "col": [8, 10] }
+    }
+  ]
+}

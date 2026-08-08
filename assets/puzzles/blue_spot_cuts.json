@@ -1,0 +1,32 @@
+{
+  "id": "blue_spot_cuts",
+  "name": "Blue Spot Cuts",
+  "description": "Object ball pinned to the blue spot; cue ball moves around it so every exercise is a different cut angle at the same real-world spot.",
+  "exercises": [
+    {
+      "label": "Straight-ish, up from baulk",
+      "object_ball": { "row": [6, 6], "col": [5, 5] },
+      "cue_ball": { "row": [0, 2], "col": [4, 6] }
+    },
+    {
+      "label": "Cut from the left",
+      "object_ball": { "row": [6, 6], "col": [5, 5] },
+      "cue_ball": { "row": [5, 7], "col": [0, 2] }
+    },
+    {
+      "label": "Cut from the right",
+      "object_ball": { "row": [6, 6], "col": [5, 5] },
+      "cue_ball": { "row": [5, 7], "col": [8, 10] }
+    },
+    {
+      "label": "Steep cut from below-left",
+      "object_ball": { "row": [6, 6], "col": [5, 5] },
+      "cue_ball": { "row": [1, 3], "col": [0, 3] }
+    },
+    {
+      "label": "Steep cut from below-right",
+      "object_ball": { "row": [6, 6], "col": [5, 5] },
+      "cue_ball": { "row": [1, 3], "col": [7, 10] }
+    }
+  ]
+}
