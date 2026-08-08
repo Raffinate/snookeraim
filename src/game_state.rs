@@ -12,8 +12,8 @@ use crate::cue::{draw_cue, draw_cue_model};
 use crate::cushion_segments::{CUSHION_BOUNDARY, SHORT_RAIL_BOUNDARY};
 use crate::puzzle::sample_exercise;
 use crate::shot::{
-    best_pocket, cue_raycast, draw_gate, draw_object_ball_aim_line, draw_path_stripe,
-    random_shot_setup, test_shot, ShotTest, GATE_MISS_COLOR, GATE_NEUTRAL_COLOR, GATE_SUCCESS_COLOR,
+    best_pocket, cue_raycast, draw_object_ball_aim_line, draw_path_stripe, draw_pocket_boundary,
+    random_shot_setup, test_shot, ShotTest, POCKET_MISS_COLOR, POCKET_NEUTRAL_COLOR, POCKET_SUCCESS_COLOR,
     GHOST_BALL_COLOR, GHOST_RED_BALL_COLOR, PATH_RED_COLOR, PATH_WHITE_COLOR,
 };
 use crate::table::{
@@ -716,11 +716,11 @@ impl GameState {
             }
         }
 
-        // Gates are a debug visualization -- ball generation only ever
-        // needs *a* makeable pocket to exist (see `best_pocket`), not that
-        // every pocket's gate be visible during normal play, so all of
-        // them (including the target's) live behind the same toggle as the
-        // cushion-boundary/collision-ring overlay above.
+        // Pocket boundaries are a debug visualization -- ball generation
+        // only ever needs *a* makeable pocket to exist (see `best_pocket`),
+        // not that every pocket's boundary be visible during normal play,
+        // so all of them (including the target's) live behind the same
+        // toggle as the cushion-boundary/collision-ring overlay above.
         if self.show_collision_debug {
             for (i, pocket) in assets.pockets.iter().enumerate() {
                 // Green for whichever pocket the ball actually fell into
@@ -729,11 +729,11 @@ impl GameState {
                 // potting a different pocket is still a pot, not a miss;
                 // neutral otherwise.
                 let color = match &self.shot_test {
-                    Some(test) if test.pocketed == Some(i) => GATE_SUCCESS_COLOR,
-                    Some(test) if test.pocketed.is_none() && i == self.target_pocket => GATE_MISS_COLOR,
-                    _ => GATE_NEUTRAL_COLOR,
+                    Some(test) if test.pocketed == Some(i) => POCKET_SUCCESS_COLOR,
+                    Some(test) if test.pocketed.is_none() && i == self.target_pocket => POCKET_MISS_COLOR,
+                    _ => POCKET_NEUTRAL_COLOR,
                 };
-                draw_gate(d3, pocket.position, pocket.radius, color);
+                draw_pocket_boundary(d3, pocket.position, pocket.radius, color);
             }
         }
 
@@ -791,9 +791,9 @@ impl GameState {
 
         if let Some((screen_pos, potted)) = pot_marker {
             let (label, color) = if potted {
-                ("V", GATE_SUCCESS_COLOR)
+                ("V", POCKET_SUCCESS_COLOR)
             } else {
-                ("X", GATE_MISS_COLOR)
+                ("X", POCKET_MISS_COLOR)
             };
             let size = 44;
             let w = d.measure_text(label, size);

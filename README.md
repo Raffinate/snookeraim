@@ -65,7 +65,7 @@ disturb the aim. It ignores the camera's *pitch*: the cue stays
 near-horizontal, raised by a fixed small angle from tip to butt, so
 looking down from above doesn't tilt it into the table.
 
-**Ghost ball, aim line, and the potting "gate" are pure geometry, no
+**Ghost ball, aim line, and the pocket boundary are pure geometry, no
 physics.** Three related aids, all computed as straight-line raycasts in
 the table plane:
 - *Ghost ball* (`G`): where the cue ball's center would be at first contact
@@ -76,20 +76,27 @@ the table plane:
   would travel if hit, using the standard no-spin "ghost ball"
   approximation (it departs along the line from the contact point through
   its own center).
-- *Gate* (always visible): two posts a bit wider than a ball's diameter,
-  spanning the *best* pocket for the current layout, perpendicular to the
-  object ball's ideal path in. "Best" means smallest cut angle among
-  pockets with a physically reachable contact point — 0° is a straight
-  in-line pot, beyond ~90° is impossible. Falls back to the nearest pocket
-  if every cut is too thin.
+- *Pocket boundary* (collision-debug view, Shift+`\``): every pocket is
+  treated as a plain cylinder — a circle centered exactly on the
+  idealized rail-corner coordinate (where the table's two rail lines
+  intersect), sized to its own radius. A shot is potted the
+  instant the object ball's *center* crosses into that circle, checked
+  against every pocket, not just the layout's "best" one — the pocket
+  offering the smallest cut angle among those with a physically reachable
+  contact point (0° is a straight in-line pot, beyond ~90° is impossible,
+  falling back to the nearest pocket if every cut is too thin). That
+  "best" pocket is only used to pick which one the `3`/`LINE` camera
+  preset sights down, and which one's boundary circle turns red on a true
+  miss in the debug view — the pot/miss check itself always considers
+  every pocket.
 
 **`Space` freezes a shot test.** Pressing it traces the cue ball to its
 first contact, then (if it hit the object ball) traces the object ball's
-resulting path to *its* first event — passing through the gate (green,
-potted) or hitting a cushion (red, missed) — and draws both paths as flat
-"stadium" stripes (a ball-width-wide rectangle with circular end caps).
-The result is frozen until the next `Space` or `R`, so you can orbit
-around and inspect it without recomputing.
+resulting path to *its* first event — its center crossing into a pocket's
+boundary circle (green, potted) or hitting a cushion (red, missed) — and
+draws both paths as flat "stadium" stripes (a ball-width-wide rectangle
+with circular end caps). The result is frozen until the next `Space` or
+`R`, so you can orbit around and inspect it without recomputing.
 
 **Rotation sensitivity is cursor-aware, with two different rules for two
 different cases.** Fixed radians-per-pixel felt wrong: pointing at

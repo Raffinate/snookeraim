@@ -8,8 +8,26 @@ pub const TABLE_WIDTH: f32 = 1.778; // short axis (X)
 pub const CUSHION_HEIGHT: f32 = 0.05;
 pub const CUSHION_THICKNESS: f32 = 0.06;
 pub const BALL_RADIUS: f32 = 0.02625;
-pub const CORNER_POCKET_RADIUS: f32 = 0.045;
-pub const MIDDLE_POCKET_RADIUS: f32 = 0.05;
+// Both pockets' pot-boundary circle (see shot.rs::test_shot) is centered
+// on `Pocket.position` -- the idealized rail-line intersection -- not on
+// the real pocket's own center. For a corner pocket that intersection
+// point sits at the hole's *far* edge, not its middle (the real hole
+// opens up entirely on the table side of it), so a circle actually
+// centered there needs the *full real diameter* as its radius to still
+// reach the near mouth -- hence corner = 2x the real ~88.9mm-diameter
+// WPBSA mouth radius (0.045 -> 0.09). A middle pocket's rail intersection
+// is much closer to centered on the real hole, so it keeps the real
+// ~101.6mm-diameter mouth radius (0.05) as-is, no doubling.
+//
+// Both are then padded for the real pocket's rounded mouth edges (a
+// dead-straight shot into the true corner of a square hole would still
+// need to clip a rounded lip that isn't there in this plain-circle
+// model): + BALL_RADIUS/2 each. Corner gets that same pad a second time
+// (BALL_RADIUS/2 * 2 == BALL_RADIUS) for the same reason its main radius
+// is doubled -- the pad has to reach across the same far-edge-as-center
+// offset the real radius does.
+pub const CORNER_POCKET_RADIUS: f32 = 0.09 + BALL_RADIUS;
+pub const MIDDLE_POCKET_RADIUS: f32 = 0.05 + BALL_RADIUS / 2.0;
 
 // A random layout is only "realistic" if the balls have some breathing room
 // and at least one pocket offers a pot that isn't a near-impossible sliver

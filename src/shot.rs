@@ -2,16 +2,14 @@ use raylib::prelude::*;
 
 use crate::table::{cushion_t, random_ball_position, safe_half_length, safe_half_width, BALL_RADIUS, MAX_PLACEMENT_ATTEMPTS, MAX_REALISTIC_CUT_DEG, Pocket};
 
-pub const GATE_POST_RADIUS: f32 = 0.008;
-pub const GATE_POST_HEIGHT: f32 = 0.09;
 pub const PATH_HEIGHT: f32 = 0.0015; // path stripes sit just above the cloth
 
 pub const GHOST_BALL_COLOR: Color = Color::new(255, 255, 255, 90);
 pub const AIM_LINE_COLOR: Color = Color::new(255, 220, 40, 230);
 pub const GHOST_RED_BALL_COLOR: Color = Color::new(230, 60, 60, 110);
-pub const GATE_NEUTRAL_COLOR: Color = Color::new(40, 120, 235, 255); // blue -- near-white read poorly against the white gallery room
-pub const GATE_SUCCESS_COLOR: Color = Color::new(50, 220, 60, 255);
-pub const GATE_MISS_COLOR: Color = Color::new(220, 50, 50, 255);
+pub const POCKET_NEUTRAL_COLOR: Color = Color::new(40, 120, 235, 255); // blue -- near-white read poorly against the white gallery room
+pub const POCKET_SUCCESS_COLOR: Color = Color::new(50, 220, 60, 255);
+pub const POCKET_MISS_COLOR: Color = Color::new(220, 50, 50, 255);
 pub const PATH_WHITE_COLOR: Color = Color::new(255, 255, 255, 110);
 pub const PATH_RED_COLOR: Color = Color::new(230, 60, 60, 110);
 
@@ -21,22 +19,20 @@ pub const PATH_RED_COLOR: Color = Color::new(230, 60, 60, 110);
 /// a grid-sampled placement is even a legal shot.
 pub const MAX_REACHABLE_CUT_DEG: f32 = 80.0;
 
-pub fn cross2(a: (f32, f32), b: (f32, f32)) -> f32 {
-    a.0 * b.1 - a.1 * b.0
-}
-
-/// `t` along ray `origin + dir*t` where it crosses segment `a`-`b`, if the
-/// crossing is ahead of the ray and within the segment's bounds.
-pub fn ray_segment_t(origin: (f32, f32), dir: (f32, f32), a: (f32, f32), b: (f32, f32)) -> Option<f32> {
-    let ab = (b.0 - a.0, b.1 - a.1);
-    let denom = cross2(dir, ab);
-    if denom.abs() < 1e-6 {
-        return None;
-    }
-    let ao = (a.0 - origin.0, a.1 - origin.1);
-    let t = cross2(ao, ab) / denom;
-    let s = cross2(ao, dir) / denom;
-    (t > 0.0 && (0.0..=1.0).contains(&s)).then_some(t)
+/// `t` along ray `origin + dir*t` where it first enters the circle of
+/// `radius` centered at `center`, if that happens ahead of the ray at all
+/// -- same 2D ray-circle math `cue_raycast` already uses for ball-ball
+/// contact, reused here for "does this ball's center cross into the
+/// pocket's real boundary".
+pub fn ray_circle_t(origin: (f32, f32), dir: (f32, f32), center: (f32, f32), radius: f32) -> Option<f32> {
+    let ocx = origin.0 - center.0;
+    let ocz = origin.1 - center.1;
+    let b = 2.0 * (ocx * dir.0 + ocz * dir.1);
+    let c = ocx * ocx + ocz * ocz - radius * radius;
+    let discriminant = b * b - 4.0 * c;
+    (discriminant >= 0.0)
+        .then(|| (-b - discriminant.sqrt()) / 2.0)
+        .filter(|t| *t > 0.0)
 }
 
 /// Where the cue ball's center would be at its first contact — either with
@@ -157,103 +153,37 @@ pub struct ShotTest {
     pub red_path: Option<(Vector3, Vector3)>,
     /// Index into `pockets()` of whichever pocket the object ball actually
     /// fell into, if any -- not necessarily the target pocket. A shot can
-    /// physically pot the object ball through *any* pocket's gate, not
+    /// physically pot the object ball through *any* pocket's boundary, not
     /// just the one the layout was generated to favor (see `best_pocket`);
     /// this is what actually happened, for the caller to compare against
     /// whatever pocket it cares about.
     pub pocketed: Option<usize>,
 }
 
-/// The pocket's own fixed "straight in" direction -- for a middle pocket,
-/// straight across, perpendicular to the long rail; for a corner pocket,
-/// the bisector of the local right angle between the long and short rail
-/// meeting there, which is *always* exactly 45° regardless of the table's
-/// overall proportions. Deliberately NOT the direction toward the table's
-/// center point -- since TABLE_LENGTH != TABLE_WIDTH, that direction is
-/// skewed off the true 45° (about 26.5° for this table), biased toward
-/// the long-rail side. Fixed per pocket position; does not depend on
-/// where the object ball currently is, so the gate built from it (see
-/// `pocket_jaws`) never rotates with aim -- only the camera moving around
-/// it can make it look different from frame to frame.
-fn pocket_mouth_dir(pocket_pos: Vector3) -> (f32, f32) {
-    if pocket_pos.z.abs() < 1e-4 {
-        (-pocket_pos.x.signum(), 0.0)
-    } else {
-        let s = std::f32::consts::FRAC_1_SQRT_2;
-        (-pocket_pos.x.signum() * s, -pocket_pos.z.signum() * s)
-    }
-}
-
-// pockets()'s position is the idealized rail-corner coordinate
-// (±TABLE_WIDTH/2, ±TABLE_LENGTH/2) -- convenient for placement/collision
-// elsewhere, but not where the pocket actually opens. Measured directly
-// from the real cushion-nose boundary data already extracted from the
-// table mesh (CUSHION_BOUNDARY/SHORT_RAIL_BOUNDARY, see
-// scripts/extract_cushion_segments.py): each rail's boundary rises
-// through a flare zone near a pocket and then plateaus once "no more
-// cushion, this is pocket" -- found where the long-rail boundary reaches
-// that plateau (z: 1.6928, vs. the idealized TABLE_LENGTH/2 = 1.7845 --
-// inset 0.0917) and where the short-rail boundary does the same (x:
-// 0.7988 vs TABLE_WIDTH/2 = 0.889 -- inset 0.0902). Both corner insets
-// agree to within 1.5mm, consistent with the extraction script's own
-// finding that the cushion cross-section is identical on every rail, so
-// one constant (their average) covers all four corners.
-//
-// The middle pockets' mouth-zone data shows the same thing but much
-// smaller: the long-rail boundary is already within a few mm of its peak
-// (0.8865) at the smallest along-rail value the data has (z=0.052,
-// clamped from z=0), giving inset 0.889-0.8865 = 0.0025 -- negligible
-// depth-wise, just a small outward-coordinate correction.
-const CORNER_ENTRANCE_INSET: f32 = 0.0909; // (0.0917 + 0.0902) / 2
-const MIDDLE_ENTRANCE_INSET: f32 = 0.0025;
-
-/// Where the pocket actually opens, inset from `pockets()`'s idealized
-/// rail-corner coordinate by `CORNER_ENTRANCE_INSET`/`MIDDLE_ENTRANCE_INSET`
-/// -- see the comment above. Used only for gate placement (`pocket_jaws`);
-/// everything else (ball-clearance checks, pocket rendering, cut-angle
-/// math) keeps using the plain idealized position, since that's a separate
-/// concern from where the gate itself should sit.
-fn pocket_entrance(pocket_pos: Vector3) -> Vector3 {
-    if pocket_pos.z.abs() < 1e-4 {
-        Vector3::new(pocket_pos.x - pocket_pos.x.signum() * MIDDLE_ENTRANCE_INSET, pocket_pos.y, pocket_pos.z)
-    } else {
-        Vector3::new(
-            pocket_pos.x - pocket_pos.x.signum() * CORNER_ENTRANCE_INSET,
-            pocket_pos.y,
-            pocket_pos.z - pocket_pos.z.signum() * CORNER_ENTRANCE_INSET,
-        )
-    }
-}
-
-/// The pocket's two fixed jaw points, `pocket_radius` out from the
-/// pocket's real entrance (`pocket_entrance`, not the idealized
-/// `pocket_pos`) on either side of `pocket_mouth_dir`, approximating the
-/// real physical entrance a ball must pass between to be potted.
-fn pocket_jaws(pocket_pos: Vector3, pocket_radius: f32) -> ((f32, f32), (f32, f32)) {
-    let (mx, mz) = pocket_mouth_dir(pocket_pos);
-    let entrance = pocket_entrance(pocket_pos);
-    let (px, pz) = (-mz * pocket_radius, mx * pocket_radius);
-    (
-        (entrance.x + px, entrance.z + pz),
-        (entrance.x - px, entrance.z - pz),
-    )
-}
-
 /// Simulates a dead-straight shot from the current cue direction: traces
 /// the cue ball to its first contact (object ball or cushion), then — if it
 /// hit the object ball — traces the object ball's resulting path (straight
-/// through its center, no spin) to its own first event: passing through
-/// *any* pocket's gate (potted -- not necessarily the target pocket, since
-/// a ball headed into a mouth pots regardless of which pocket the layout
-/// happened to favor) or hitting a cushion (missed). Potted means: the
-/// ball's straight-line path, given its own radius, passes between a
-/// pocket's two fixed jaw points (`pocket_jaws`) without touching either.
-/// Deliberately *not* compared against `cushion_t` -- that boundary is
-/// measured off the cushion nose's own flare geometry, which (like a real
-/// table) rises to meet the cloth right at the pocket mouth with no gap,
-/// so it's always reached at or before the gate line; requiring the gate
-/// to win that race would make potting impossible everywhere, not just
-/// non-target pockets.
+/// through its center, no spin) to its own first event: its *center*
+/// crossing into any pocket's boundary circle (potted -- not necessarily
+/// the target pocket, since a ball headed into a mouth pots regardless of
+/// which pocket the layout happened to favor) or hitting a cushion
+/// (missed). Pockets are treated as plain cylinders: a circle of
+/// `pocket.radius` centered on `pocket.position` -- the idealized rail-
+/// corner coordinate (±TABLE_WIDTH/2, ±TABLE_LENGTH/2 for a corner,
+/// ±TABLE_WIDTH/2 at mid-length for a middle pocket), i.e. exactly where
+/// the table's two rail lines intersect. No inset correction (an earlier
+/// attempt to find the "real" mesh-measured pocket mouth, via the cushion
+/// boundary's flare plateau and then via the mesh's own throat-wall
+/// vertices, either didn't match how it actually looked in the game or
+/// wasn't reliably measurable) -- instead `pocket.radius` itself
+/// (table.rs) is sized to make this off-center circle work: see that
+/// constant's own comment for why corner and middle scale differently.
+/// A pocket only counts if its circle is reached *before* `cushion_t`
+/// (checked explicitly, not just assumed) -- with the old, small, inset
+/// circles the cushion boundary's own flare geometry guaranteed this on
+/// its own (no cushion left at the pocket mouth to hit first), but the
+/// enlarged, non-inset circles now in use can extend into table area a
+/// real cushion still covers.
 pub fn test_shot(
     shot_dir: (f32, f32),
     cue_ball_pos: Vector3,
@@ -279,36 +209,33 @@ pub fn test_shot(
 
     let t_red_cushion = cushion_t(object_ball_pos.x, object_ball_pos.z, rdx, rdz);
 
-    // Fits through a gate only if the ball's edge clears *both* fixed jaw
-    // points by BALL_RADIUS -- checked directly as the perpendicular
-    // distance from each jaw to the ball's actual path line -- and its
-    // center's path actually crosses between them (ray_segment_t). The
-    // drawn post (GATE_POST_RADIUS) is just a visual marker for the jaw's
-    // location, not a real obstacle -- real pockets have no post there --
-    // so it plays no part in this check. Checked against every pocket
-    // (not just the target), taking whichever gate the path reaches first
-    // -- a straight line can plausibly clear more than one pocket's jaws
-    // at once (e.g. skimming past a middle pocket on the way to a corner),
-    // so "first" is what decides which one the ball actually falls into.
+    // Potted the moment the ball's *center* crosses into a pocket's
+    // boundary circle (pocket.position, pocket.radius) -- a plain ray-
+    // circle test, checked against every pocket (not just the target),
+    // taking whichever one the path reaches first -- a straight line can
+    // plausibly cross more than one pocket's circle (e.g. skimming past a
+    // middle pocket on the way to a corner), so "first" is what decides
+    // which one the ball actually falls into. Explicitly required to be
+    // reached *before* the cushion (t < t_red_cushion): with the old,
+    // small, inset circles the cushion boundary's own flare geometry
+    // guaranteed this automatically (no cushion at the pocket mouth to
+    // hit first), but the enlarged, non-inset circles now used (see
+    // table.rs's *_POCKET_RADIUS comments) can extend into table area a
+    // real cushion still covers, so a ball skimming past on the cushion
+    // line -- never actually heading into the mouth -- must still bounce
+    // off that cushion, not get credited with a pot it never reached.
     let origin = (object_ball_pos.x, object_ball_pos.z);
-    let mut earliest_gate: Option<(usize, f32)> = None;
+    let mut earliest_pocket: Option<(usize, f32)> = None;
     for (i, pocket) in pockets.iter().enumerate() {
-        let (jaw_a, jaw_b) = pocket_jaws(pocket.position, pocket.radius);
-        let clears_jaw = |jaw: (f32, f32)| {
-            let to_jaw = (jaw.0 - origin.0, jaw.1 - origin.1);
-            cross2((rdx, rdz), to_jaw).abs() >= BALL_RADIUS
-        };
-        if !(clears_jaw(jaw_a) && clears_jaw(jaw_b)) {
-            continue;
-        }
-        if let Some(t) = ray_segment_t(origin, (rdx, rdz), jaw_a, jaw_b) {
-            if earliest_gate.is_none_or(|(_, best_t)| t < best_t) {
-                earliest_gate = Some((i, t));
+        let center = (pocket.position.x, pocket.position.z);
+        if let Some(t) = ray_circle_t(origin, (rdx, rdz), center, pocket.radius) {
+            if t < t_red_cushion && earliest_pocket.is_none_or(|(_, best_t)| t < best_t) {
+                earliest_pocket = Some((i, t));
             }
         }
     }
 
-    let (red_end_t, pocketed) = match earliest_gate {
+    let (red_end_t, pocketed) = match earliest_pocket {
         Some((i, t)) => (t, Some(i)),
         None => (t_red_cushion, None),
     };
@@ -325,22 +252,20 @@ pub fn test_shot(
     }
 }
 
-/// Draws the potting "gate" at a pocket: two posts at its fixed jaw points
-/// (see `pocket_jaws`) -- the same points `test_shot` checks a shot's path
-/// against, so the drawn gate and the pass/fail check always agree. Fixed
-/// per pocket, not per aim, so this doesn't rotate as the object ball
-/// moves; any apparent rotation on screen is just the camera.
-pub fn draw_gate(d: &mut impl RaylibDraw3D, pocket_pos: Vector3, pocket_radius: f32, color: Color) {
-    let (jaw_a, jaw_b) = pocket_jaws(pocket_pos, pocket_radius);
-    let a = Vector3::new(jaw_a.0, 0.0, jaw_a.1);
-    let b = Vector3::new(jaw_b.0, 0.0, jaw_b.1);
-    d.draw_cylinder(a, GATE_POST_RADIUS, GATE_POST_RADIUS, GATE_POST_HEIGHT, 10, color);
-    d.draw_cylinder(b, GATE_POST_RADIUS, GATE_POST_RADIUS, GATE_POST_HEIGHT, 10, color);
-    d.draw_line3D(
-        Vector3::new(a.x, GATE_POST_HEIGHT, a.z),
-        Vector3::new(b.x, GATE_POST_HEIGHT, b.z),
-        color,
-    );
+/// Draws a pocket's boundary circle (`pocket_pos`, `pocket_radius`) as a
+/// ring at cloth height -- the same circle `test_shot` checks a shot's
+/// path against, so the drawn boundary and the pass/fail check always
+/// agree. Same technique as `draw_ball_collision_ring` in table.rs.
+pub fn draw_pocket_boundary(d: &mut impl RaylibDraw3D, pocket_pos: Vector3, pocket_radius: f32, color: Color) {
+    const SEGMENTS: usize = 32;
+    let y = 0.02;
+    let mut prev = Vector3::new(pocket_pos.x + pocket_radius, y, pocket_pos.z);
+    for i in 1..=SEGMENTS {
+        let a = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let next = Vector3::new(pocket_pos.x + pocket_radius * a.cos(), y, pocket_pos.z + pocket_radius * a.sin());
+        d.draw_line3D(prev, next, color);
+        prev = next;
+    }
 }
 
 /// Draws a ball's swept path as a flat "stadium" (rectangle + round caps)
@@ -410,10 +335,10 @@ mod pot_tests {
     /// Builds a cue/object ball pair such that a dead-straight shot sends
     /// the object ball directly at `pockets[target_idx]`, then runs
     /// `test_shot` and asserts it's recognized as potted there. Regression
-    /// coverage for a bug where comparing the gate crossing's `t` against
-    /// `cushion_t` made every pot impossible (see `test_shot`'s doc
+    /// coverage for a bug where comparing the pocket-circle crossing's `t`
+    /// against `cushion_t` made every pot impossible (see `test_shot`'s doc
     /// comment) -- caught because it broke potting into every pocket, not
-    /// just non-target ones, once gates were checked for all of them.
+    /// just non-target ones, once every pocket's circle was checked.
     fn assert_pots(object_ball_pos: Vector3, target_idx: usize) {
         let pockets = pockets();
         let target = pockets[target_idx].position;
@@ -444,5 +369,54 @@ mod pot_tests {
     #[test]
     fn pots_into_corner_pocket() {
         assert_pots(Vector3::new(0.0, BALL_RADIUS, 1.0), 2);
+    }
+
+    /// Same as `pots_into_corner_pocket`, but from a position off both
+    /// axes -- a genuine angled cut, not just the axis-aligned degenerate
+    /// case `assert_pots`'s other callers happen to use. Guards against a
+    /// regression where the pocket-boundary circle only lines up right
+    /// along the rail directions.
+    #[test]
+    fn pots_into_corner_pocket_at_an_angle() {
+        assert_pots(Vector3::new(0.3, BALL_RADIUS, 1.2), 3);
+    }
+
+    /// A shot aimed well wide of every pocket's real boundary circle
+    /// should miss (hit a cushion), even though it starts from roughly
+    /// the same neighborhood as `pots_into_corner_pocket_at_an_angle`'s
+    /// object ball -- guards against the boundary circle being so large
+    /// it swallows shots that were never actually heading into the mouth.
+    #[test]
+    fn misses_when_aimed_well_wide_of_every_pocket() {
+        let pockets = pockets();
+        let object_ball_pos = Vector3::new(0.3, BALL_RADIUS, 1.2);
+        // Straight down the table (+X), parallel to the short rail --
+        // nowhere near any pocket's boundary circle.
+        let dir = (1.0, 0.0);
+        let contact = Vector3::new(object_ball_pos.x - dir.0 * BALL_RADIUS * 2.0, BALL_RADIUS, object_ball_pos.z);
+        let cue_ball_pos = Vector3::new(contact.x - 0.3, BALL_RADIUS, contact.z);
+
+        let result = test_shot(dir, cue_ball_pos, object_ball_pos, &pockets);
+        assert_eq!(result.pocketed, None);
+    }
+
+    /// A pocket circle that the path would only cross *after* the real
+    /// cushion is reached must not count as potted -- guards against the
+    /// regression where `test_shot` trusted "some pocket circle was
+    /// crossed at all" instead of actually comparing that crossing's `t`
+    /// against `cushion_t`. Uses a synthetic pocket placed just beyond
+    /// the real long-rail cushion (rather than today's real, now-
+    /// enlarged pockets) so this checks the ordering logic itself, not
+    /// whatever the current tuned radii happen to allow.
+    #[test]
+    fn hits_the_cushion_before_a_pocket_circle_reached_only_after_it() {
+        let fake_pocket = Pocket { position: Vector3::new(1.5, 0.0, 0.0), radius: 0.3 };
+        let object_ball_pos = Vector3::new(0.5, BALL_RADIUS, 0.0);
+        let dir = (1.0, 0.0); // straight toward the long-rail cushion, and beyond it, the fake pocket
+        let contact = Vector3::new(object_ball_pos.x - dir.0 * BALL_RADIUS * 2.0, BALL_RADIUS, object_ball_pos.z);
+        let cue_ball_pos = Vector3::new(contact.x - 0.3, BALL_RADIUS, contact.z);
+
+        let result = test_shot(dir, cue_ball_pos, object_ball_pos, &[fake_pocket]);
+        assert_eq!(result.pocketed, None, "should hit the real cushion before ever reaching the pocket circle beyond it");
     }
 }
