@@ -5,7 +5,8 @@ use crate::camera::{
     aiming_camera, apply_aim_stance, cursor_table_point, pot_line_camera, rotate_sensitivity,
     screen_ray_table_point, zoom_toward, CAMERA_CLOSE_BACK_DISTANCE, CAMERA_CLOSE_ELEVATION_DEG,
     CAMERA_STANCE_BACK_DISTANCE, CAMERA_STANCE_ELEVATION_DEG, CAMERA_STANCE_LATERAL_OFFSET,
-    KEY_ROTATE_SPEED_DEG, PAN_SPEED, PINCH_ZOOM_SENSITIVITY, ZOOM_BUTTON_SPEED,
+    KEY_ROTATE_SPEED_DEG, PAN_SPEED, PINCH_ZOOM_SENSITIVITY, WHEEL_ZOOM_SENSITIVITY,
+    ZOOM_BUTTON_SPEED,
 };
 use crate::cue::{draw_cue, draw_cue_model};
 use crate::cushion_segments::{CUSHION_BOUNDARY, SHORT_RAIL_BOUNDARY};
@@ -21,7 +22,7 @@ use crate::table::{
     TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z, USE_GALLERY_MODEL,
     USE_MODEL_PROPS, USE_SKY_MODEL, USE_TABLE_MODEL,
 };
-use crate::touch_ui::{opt_hit, TouchUi, HELP_BG};
+use crate::touch_ui::{opt_hit, MenuUi, TouchUi, HELP_BG};
 
 /// `draw_mesh` consumes its material by value; this hands it a throwaway
 /// non-owning copy so the real material survives to the next frame.
@@ -50,6 +51,8 @@ pub struct GameState {
     pub(crate) ghost_aim_visible: bool,
     pub(crate) show_collision_debug: bool,
     pub(crate) pinch_prev_dist: Option<f32>,
+    pub(crate) menu_visible: bool,
+    pub(crate) quit_requested: bool,
 }
 
 /// How far off dead-on-target a fresh layout's initial cue aim starts,
@@ -97,6 +100,8 @@ impl GameState {
             ghost_aim_visible: true,
             show_collision_debug: false,
             pinch_prev_dist: None,
+            menu_visible: false,
+            quit_requested: false,
         }
     }
 
@@ -108,7 +113,10 @@ impl GameState {
 
     /// Shift+`\`` toggles the collision-debug overlay; `?`/the help button
     /// toggles the help popup, and any other tap while it's open dismisses
-    /// it (the help button itself is excluded by the branch above).
+    /// it (the help button itself is excluded by the branch above). Esc
+    /// closes the help popup if it's open, otherwise toggles the pause
+    /// menu -- raylib's default exit-on-Esc is disabled in `main` so this
+    /// is the only thing Esc does (see `handle_menu` for Continue/Quit).
     pub fn handle_global_toggles(&mut self, rl: &RaylibHandle, ui: &TouchUi, mouse: Vector2, tap: bool) {
         if rl.is_key_pressed(KeyboardKey::KEY_GRAVE)
             && (rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
@@ -117,10 +125,37 @@ impl GameState {
             self.show_collision_debug = !self.show_collision_debug;
         }
 
+        if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+            if self.help_visible {
+                self.help_visible = false;
+            } else {
+                self.menu_visible = !self.menu_visible;
+            }
+            return;
+        }
+
+        if self.menu_visible {
+            return;
+        }
+
         if rl.is_key_pressed(KeyboardKey::KEY_SLASH) || (tap && ui.help.hit(mouse)) {
             self.help_visible = !self.help_visible;
         } else if self.help_visible && tap {
             self.help_visible = false;
+        }
+    }
+
+    /// CONTINUE closes the pause menu; QUIT (native builds only) requests
+    /// the main loop exit. Only reacts while the menu is actually open, so
+    /// it's safe to call unconditionally every frame.
+    pub fn handle_menu(&mut self, menu: &MenuUi, mouse: Vector2, tap: bool) {
+        if !self.menu_visible || !tap {
+            return;
+        }
+        if menu.continue_btn.hit(mouse) {
+            self.menu_visible = false;
+        } else if opt_hit(&menu.quit_btn, mouse) {
+            self.quit_requested = true;
         }
     }
 
@@ -230,12 +265,14 @@ impl GameState {
         let wheel = rl.get_mouse_wheel_move();
         if wheel != 0.0 && !over_ui {
             // Zoom toward whatever world point is under the cursor so that
-            // point stays fixed on screen as we zoom, instead of always
-            // zooming to the orbit target.
-            if let Some(hit) = cursor_table_point(rl, self.camera) {
-                let factor = (wheel * 0.15).clamp(-0.9, 0.9);
-                zoom_toward(&mut self.camera, hit, factor);
-            }
+            // point stays fixed on screen as we zoom in, instead of always
+            // zooming to the orbit target. Falls back to the current
+            // target when the cursor doesn't hit the table plane (e.g.
+            // pointed above the horizon) -- previously that case silently
+            // dropped the scroll event instead of zooming at all.
+            let hit = cursor_table_point(rl, self.camera).unwrap_or(self.camera.target);
+            let factor = wheel * WHEEL_ZOOM_SENSITIVITY;
+            zoom_toward(&mut self.camera, hit, factor);
         }
 
         // Pinch-zoom: two fingers down, zoom by how their spread
@@ -248,11 +285,10 @@ impl GameState {
             let midpoint = t0.lerp(t1, 0.5);
             if let Some(prev) = self.pinch_prev_dist {
                 let hit = screen_ray_table_point(rl, self.camera, midpoint)
-                    .or_else(|| cursor_table_point(rl, self.camera));
-                if let Some(hit) = hit {
-                    let factor = ((dist - prev) * PINCH_ZOOM_SENSITIVITY).clamp(-0.9, 0.9);
-                    zoom_toward(&mut self.camera, hit, factor);
-                }
+                    .or_else(|| cursor_table_point(rl, self.camera))
+                    .unwrap_or(self.camera.target);
+                let factor = (dist - prev) * PINCH_ZOOM_SENSITIVITY;
+                zoom_toward(&mut self.camera, hit, factor);
             }
             self.pinch_prev_dist = Some(dist);
         } else {
@@ -596,6 +632,7 @@ impl GameState {
         &self,
         d: &mut RaylibDrawHandle,
         ui: &TouchUi,
+        menu: &MenuUi,
         mouse: Vector2,
         screen_w: i32,
         screen_h: i32,
@@ -654,12 +691,17 @@ impl GameState {
                 "Space / HIT      test the current aim: trace both balls' paths",
                 "R / CLEAR-NEXT   clear a tested shot, or reposition both balls",
                 "? / help button  toggle this popup",
+                "Esc              pause menu (continue / quit)",
             ];
             let start_y = 90;
             let line_h = 26;
             for (i, line) in lines.iter().enumerate() {
                 d.draw_text(line, 24, start_y + i as i32 * line_h, 20, Color::RAYWHITE);
             }
+        }
+
+        if self.menu_visible {
+            menu.draw(d, mouse, screen_w, screen_h);
         }
     }
 }

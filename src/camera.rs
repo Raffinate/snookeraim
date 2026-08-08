@@ -4,6 +4,7 @@ pub const PAN_SPEED: f32 = 1.2; // meters per second
 pub const KEY_ROTATE_SPEED_DEG: f32 = 90.0; // degrees per second, for Q/E
 pub const ZOOM_BUTTON_SPEED: f32 = 1.0; // meters per second, for the on-screen +/- buttons
 pub const PINCH_ZOOM_SENSITIVITY: f32 = 0.004; // per pixel of change in two-finger spread
+pub const WHEEL_ZOOM_SENSITIVITY: f32 = 0.06; // fraction of remaining distance to hit, per wheel notch
 pub const CAMERA_ELEVATION_DEG: f32 = 15.0; // above the cue ball, as seen when aiming
 pub const CAMERA_BACK_DISTANCE: f32 = 0.7; // behind the cue ball, away from the object ball
 
@@ -157,14 +158,35 @@ pub fn cursor_table_point(rl: &RaylibHandle, camera: Camera3D) -> Option<Vector3
     screen_ray_table_point(rl, camera, rl.get_mouse_position())
 }
 
-/// Zooms the camera toward `hit` by `factor` (a fraction of the remaining
-/// distance, same convention as a lerp) while keeping the camera-to-target
-/// distance clamped to a sane range -- shared by wheel-zoom and pinch-zoom,
-/// which both zoom toward a specific world point rather than along the
-/// current view axis (see the on-screen zoom buttons for that variant).
+/// Zooms the camera toward `hit` by `factor` (roughly the fraction of the
+/// remaining distance to close, negative to zoom out) while keeping the
+/// camera-to-target distance clamped to a sane range -- shared by
+/// wheel-zoom and pinch-zoom, which both zoom toward a specific world point
+/// rather than along the current view axis (see the on-screen zoom buttons
+/// for that variant).
+///
+/// Zooming in and out are deliberately asymmetric. Zooming in contracts
+/// both the camera position *and* the target toward `hit`, so the point
+/// under the cursor ends up centered as you get closer to it. Zooming out
+/// only moves the camera position -- the target stays put. Extrapolating
+/// the target *away* from `hit` (the naive inverse of the zoom-in lerp)
+/// diverges: each step multiplies the target's distance from `hit` by
+/// roughly `1 + |factor|`, so a few scroll notches send the target
+/// rocketing off in whatever direction `target - hit` happened to point,
+/// dragging the whole orbit pivot into empty space. That read as the
+/// camera sliding sideways instead of backing away, and let zoom-out
+/// travel arbitrarily far since nothing bounded the target itself (only
+/// the position-target distance was clamped).
 pub fn zoom_toward(camera: &mut Camera3D, hit: Vector3, factor: f32) {
-    camera.position = camera.position.lerp(hit, factor);
-    camera.target = camera.target.lerp(hit, factor);
+    let factor = factor.clamp(-0.9, 0.9);
+    if factor >= 0.0 {
+        camera.position = camera.position.lerp(hit, factor);
+        camera.target = camera.target.lerp(hit, factor);
+    } else {
+        let dir = (camera.position - camera.target).normalize();
+        let dist = camera.position.distance(camera.target) / (1.0 + factor);
+        camera.position = camera.target + dir.scale(dist);
+    }
 
     let dist = camera.position.distance(camera.target).clamp(0.15, 6.0);
     let dir = (camera.position - camera.target).normalize();

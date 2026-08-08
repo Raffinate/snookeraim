@@ -103,6 +103,57 @@ pub fn opt_hit(btn: &Option<Btn>, mouse: Vector2) -> bool {
     btn.as_ref().is_some_and(|b| b.hit(mouse))
 }
 
+/// The ESC pause menu: CONTINUE always, QUIT only on native builds. A web
+/// build runs inside a browser tab that the page itself has no way to
+/// close, so rather than show a QUIT button that can't actually do
+/// anything, it just doesn't exist there -- same `Option<Btn>` pattern as
+/// the collapsible GHOST/AIM buttons above.
+pub struct MenuUi {
+    pub continue_btn: Btn,
+    pub quit_btn: Option<Btn>,
+    title_y: i32,
+}
+
+impl MenuUi {
+    pub fn draw(&self, d: &mut RaylibDrawHandle, mouse: Vector2, screen_w: i32, screen_h: i32) {
+        d.draw_rectangle(0, 0, screen_w, screen_h, HELP_BG);
+        let title = "PAUSED";
+        let title_size = 32;
+        let title_w = d.measure_text(title, title_size);
+        d.draw_text(title, screen_w / 2 - title_w / 2, self.title_y, title_size, Color::RAYWHITE);
+        self.continue_btn.draw(d, mouse, false);
+        if let Some(b) = &self.quit_btn {
+            b.draw(d, mouse, false);
+        }
+    }
+}
+
+pub fn menu_ui(screen_w: i32, screen_h: i32) -> MenuUi {
+    let btn_w = 260;
+    let btn_h = 64;
+    let gap = 20;
+    let font = 22;
+
+    #[cfg(target_os = "emscripten")]
+    let has_quit = false;
+    #[cfg(not(target_os = "emscripten"))]
+    let has_quit = true;
+
+    let rows = if has_quit { 2 } else { 1 };
+    let stack_h = rows * btn_h + (rows - 1) * gap;
+    let x = screen_w / 2 - btn_w / 2;
+    let start_y = screen_h / 2 - stack_h / 2;
+
+    let continue_btn = Btn::new(x, start_y, btn_w, btn_h, "CONTINUE", font);
+    let quit_btn = if has_quit {
+        Some(Btn::new(x, start_y + btn_h + gap, btn_w, btn_h, "QUIT", font))
+    } else {
+        None
+    };
+
+    MenuUi { continue_btn, quit_btn, title_y: start_y - 60 }
+}
+
 impl TouchUi {
     pub fn hit_any(&self, mouse: Vector2) -> bool {
         [
