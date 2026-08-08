@@ -63,6 +63,11 @@ fn main() {
 
         assets.sync_view_pos(state.camera.position);
 
+        // Needs `rl` for the world-to-screen projection, so this has to
+        // happen before `begin_drawing` starts borrowing it exclusively for
+        // the rest of the frame's drawing.
+        let pot_marker = state.shot_result_marker(&rl);
+
         let mut d = rl.begin_drawing(&thread);
         d.clear_background(Color::new(30, 30, 30, 255));
 
@@ -71,6 +76,6 @@ fn main() {
             state.draw_scene(&mut d3, &mut assets, shot_dir);
         }
 
-        state.draw_overlay(&mut d, &ui, &menu, mouse, screen_w, screen_h);
+        state.draw_overlay(&mut d, &ui, &menu, mouse, screen_w, screen_h, pot_marker);
     }
 }

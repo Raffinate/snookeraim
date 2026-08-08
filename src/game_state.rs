@@ -16,7 +16,7 @@ use crate::shot::{
     GHOST_BALL_COLOR, GHOST_RED_BALL_COLOR, PATH_RED_COLOR, PATH_WHITE_COLOR,
 };
 use crate::table::{
-    draw_ball_collision_ring, draw_light_fixture, draw_table, Pocket, CUE_BALL_COLOR,
+    draw_ball_collision_ring, draw_light_fixture, draw_table, Pocket, BALL_RADIUS, CUE_BALL_COLOR,
     CUE_BALL_MESH_INDEX, CUE_BALL_MODEL_CENTER, GALLERY_MODEL_OFFSET_X, GALLERY_MODEL_OFFSET_Y,
     GALLERY_MODEL_OFFSET_Z, OBJECT_BALL_COLOR, RED_BALL_MESH_INDEX, RED_BALL_MODEL_CENTER,
     TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z, USE_GALLERY_MODEL,
@@ -109,6 +109,24 @@ impl GameState {
     /// when view mode was entered, even as the camera keeps moving.
     pub fn aim_camera(&self) -> Camera3D {
         if self.view_mode { self.frozen_aim_camera } else { self.camera }
+    }
+
+    /// Screen position for the last tested shot's result marker (a V/X
+    /// drawn above the object ball, see `draw_overlay`) and whether it was
+    /// a pot -- `None` once there's no tested shot to show. Above wherever
+    /// the real object ball mesh actually ends up post-shot (see
+    /// `object_ball_draw_pos` in `draw_scene`) -- its original position is
+    /// just a translucent ghost marker now, not where the eye should be
+    /// drawn to. Needs `rl` for the world-to-screen projection, which
+    /// borrows it mutably like everything else on `RaylibHandle` -- called
+    /// once in `main` before `begin_drawing` starts borrowing it for
+    /// drawing instead, and threaded through to `draw_overlay` as a plain
+    /// value.
+    pub fn shot_result_marker(&self, rl: &RaylibHandle) -> Option<(Vector2, bool)> {
+        let test = self.shot_test.as_ref()?;
+        let ball_pos = test.red_path.map_or(self.object_ball_pos, |(_, end)| end);
+        let above = Vector3::new(ball_pos.x, ball_pos.y + BALL_RADIUS * 4.0, ball_pos.z);
+        Some((rl.get_world_to_screen(above, self.camera), test.pocketed.is_some()))
     }
 
     /// Shift+`\`` toggles the collision-debug overlay; `?`/the help button
@@ -499,6 +517,22 @@ impl GameState {
         }
         draw_light_fixture(d3, &assets.light_panels);
 
+        // Once a shot's been tested, the real ball meshes (and their debug
+        // collision rings, below) sit wherever that shot actually left
+        // them -- the cue ball at its first-contact point, the object ball
+        // at wherever it stopped (including right at the gate on a pot --
+        // there's no modeled pocket throat to actually drop it into, and
+        // the gate color/V-or-X marker already say whether it went in) --
+        // rather than at their pre-shot spots with a separate translucent
+        // marker off to the side. Falls back to each ball's real,
+        // un-simulated position with no test yet, or when the object ball
+        // was never actually hit.
+        let cue_ball_draw_pos = self.shot_test.as_ref().map_or(self.cue_ball_pos, |t| t.white_end);
+        let object_ball_draw_pos = self
+            .shot_test
+            .as_ref()
+            .map_or(self.object_ball_pos, |t| t.red_path.map_or(self.object_ball_pos, |(_, end)| end));
+
         if self.show_collision_debug {
             // Both tables only cover their own non-negative half (each
             // rail is symmetric about its own center), so mirror both
@@ -528,8 +562,8 @@ impl GameState {
                 }
             }
 
-            draw_ball_collision_ring(d3, self.cue_ball_pos, Color::YELLOW);
-            draw_ball_collision_ring(d3, self.object_ball_pos, Color::ORANGE);
+            draw_ball_collision_ring(d3, cue_ball_draw_pos, Color::YELLOW);
+            draw_ball_collision_ring(d3, object_ball_draw_pos, Color::ORANGE);
         }
 
         if USE_MODEL_PROPS {
@@ -539,14 +573,14 @@ impl GameState {
             // -- balls.glb has exactly one ("Balls"), so index 1 is it.
             assets.balls_model.materials_mut()[1].set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, debug_tint);
             let balls_material = &assets.balls_model.materials()[1];
-            let cue_ball_offset = self.cue_ball_pos - CUE_BALL_MODEL_CENTER;
+            let cue_ball_offset = cue_ball_draw_pos - CUE_BALL_MODEL_CENTER;
             d3.draw_mesh(
                 &assets.balls_model.meshes()[CUE_BALL_MESH_INDEX],
                 weak_copy(balls_material),
                 Matrix::translate(cue_ball_offset.x, cue_ball_offset.y, cue_ball_offset.z),
             );
 
-            let red_ball_offset = self.object_ball_pos - RED_BALL_MODEL_CENTER;
+            let red_ball_offset = object_ball_draw_pos - RED_BALL_MODEL_CENTER;
             d3.draw_mesh(
                 &assets.balls_model.meshes()[RED_BALL_MESH_INDEX],
                 weak_copy(balls_material),
@@ -557,14 +591,14 @@ impl GameState {
             d3.draw_mesh(
                 &assets.ball_mesh,
                 weak_copy(&assets.ball_material),
-                Matrix::translate(self.cue_ball_pos.x, self.cue_ball_pos.y, self.cue_ball_pos.z),
+                Matrix::translate(cue_ball_draw_pos.x, cue_ball_draw_pos.y, cue_ball_draw_pos.z),
             );
 
             assets.ball_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, OBJECT_BALL_COLOR);
             d3.draw_mesh(
                 &assets.ball_mesh,
                 weak_copy(&assets.ball_material),
-                Matrix::translate(self.object_ball_pos.x, self.object_ball_pos.y, self.object_ball_pos.z),
+                Matrix::translate(object_ball_draw_pos.x, object_ball_draw_pos.y, object_ball_draw_pos.z),
             );
         }
 
@@ -615,20 +649,35 @@ impl GameState {
 
         if let Some(test) = &self.shot_test {
             draw_path_stripe(d3, self.cue_ball_pos, test.white_end, PATH_WHITE_COLOR);
+            // The real cue ball mesh already moved to `test.white_end`
+            // above -- leave a translucent marker at its original resting
+            // spot so it's still clear where it started from.
+            assets.ghost_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, GHOST_BALL_COLOR);
+            d3.draw_mesh(
+                &assets.ball_mesh,
+                weak_copy(&assets.ghost_material),
+                Matrix::translate(self.cue_ball_pos.x, self.cue_ball_pos.y, self.cue_ball_pos.z),
+            );
+
             if let Some((start, end)) = test.red_path {
                 draw_path_stripe(d3, start, end, PATH_RED_COLOR);
+                // Same idea for the object ball, whether it stopped
+                // elsewhere or dropped into a pocket (in which case its
+                // real mesh isn't drawn at all -- see object_ball_draw_pos
+                // above).
                 assets.ghost_material.set_map_color(MaterialMapIndex::MATERIAL_MAP_ALBEDO, GHOST_RED_BALL_COLOR);
                 d3.draw_mesh(
                     &assets.ball_mesh,
                     weak_copy(&assets.ghost_material),
-                    Matrix::translate(end.x, end.y, end.z),
+                    Matrix::translate(start.x, start.y, start.z),
                 );
             }
         }
     }
 
-    /// 2D overlay: FPS, the view-mode label, every on-screen control, and
-    /// the help popup (when open).
+    /// 2D overlay: FPS, the view-mode label, the last tested shot's
+    /// pot/miss marker, every on-screen control, and the help popup (when
+    /// open).
     pub fn draw_overlay(
         &self,
         d: &mut RaylibDrawHandle,
@@ -637,10 +686,22 @@ impl GameState {
         mouse: Vector2,
         screen_w: i32,
         screen_h: i32,
+        pot_marker: Option<(Vector2, bool)>,
     ) {
         d.draw_fps(10, 10);
         if self.view_mode {
             d.draw_text("VIEW MODE (cue aim frozen)", 10, 36, 18, Color::YELLOW);
+        }
+
+        if let Some((screen_pos, potted)) = pot_marker {
+            let (label, color) = if potted {
+                ("V", GATE_SUCCESS_COLOR)
+            } else {
+                ("X", GATE_MISS_COLOR)
+            };
+            let size = 44;
+            let w = d.measure_text(label, size);
+            d.draw_text(label, screen_pos.x as i32 - w / 2, screen_pos.y as i32 - size / 2, size, color);
         }
 
         // On-screen touch controls -- drawn every frame, on every platform
