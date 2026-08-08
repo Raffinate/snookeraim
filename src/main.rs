@@ -48,8 +48,18 @@ fn main() {
         let over_ui = ui.hit_any(mouse);
 
         state.handle_global_toggles(&rl, &ui, mouse, tap);
-        state.handle_menu(&menu, mouse, tap);
-        state.handle_puzzle_menu(&puzzle_menu, mouse, tap, &assets);
+        // Only the menu that was actually open at the start of the frame
+        // gets this click -- handle_menu can open the puzzle submenu
+        // (menu_visible -> false, puzzle_menu_visible -> true) as a side
+        // effect of handling it, and calling both unconditionally would let
+        // the same click immediately fall through to handle_puzzle_menu
+        // and hit whatever submenu button happens to occupy the same
+        // screen position as the button that was just pressed.
+        if state.menu_visible {
+            state.handle_menu(&menu, mouse, tap);
+        } else if state.puzzle_menu_visible {
+            state.handle_puzzle_menu(&puzzle_menu, mouse, tap, &assets);
+        }
 
         if !state.help_visible && !state.menu_visible && !state.puzzle_menu_visible {
             state.handle_reset_and_toggles(&rl, &ui, mouse, tap, &assets);
