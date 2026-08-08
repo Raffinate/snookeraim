@@ -146,15 +146,16 @@ pub fn random_shot_setup(pockets: &[Pocket]) -> (Vector3, Vector3) {
     (cue_ball_pos, object_ball_pos)
 }
 
-pub enum GateState {
-    Success,
-    Miss,
-}
-
 pub struct ShotTest {
     pub white_end: Vector3,
     pub red_path: Option<(Vector3, Vector3)>,
-    pub gate_state: GateState,
+    /// Index into `pockets()` of whichever pocket the object ball actually
+    /// fell into, if any -- not necessarily the target pocket. A shot can
+    /// physically pot the object ball through *any* pocket's gate, not
+    /// just the one the layout was generated to favor (see `best_pocket`);
+    /// this is what actually happened, for the caller to compare against
+    /// whatever pocket it cares about.
+    pub pocketed: Option<usize>,
 }
 
 /// The pocket's own fixed "straight in" direction -- for a middle pocket,
@@ -235,26 +236,29 @@ fn pocket_jaws(pocket_pos: Vector3, pocket_radius: f32) -> ((f32, f32), (f32, f3
 /// Simulates a dead-straight shot from the current cue direction: traces
 /// the cue ball to its first contact (object ball or cushion), then — if it
 /// hit the object ball — traces the object ball's resulting path (straight
-/// through its center, no spin) to its own first event: passing through the
-/// target gate (potted) or hitting a cushion (missed). Potted means: the
-/// ball's straight-line path, given its own radius, passes between the
+/// through its center, no spin) to its own first event: passing through
+/// *any* pocket's gate (potted -- not necessarily the target pocket, since
+/// a ball headed into a mouth pots regardless of which pocket the layout
+/// happened to favor) or hitting a cushion (missed). Potted means: the
+/// ball's straight-line path, given its own radius, passes between a
 /// pocket's two fixed jaw points (`pocket_jaws`) without touching either.
+/// Deliberately *not* compared against `cushion_t` -- that boundary is
+/// measured off the cushion nose's own flare geometry, which (like a real
+/// table) rises to meet the cloth right at the pocket mouth with no gap,
+/// so it's always reached at or before the gate line; requiring the gate
+/// to win that race would make potting impossible everywhere, not just
+/// non-target pockets.
 pub fn test_shot(
     shot_dir: (f32, f32),
     cue_ball_pos: Vector3,
     object_ball_pos: Vector3,
-    pocket_pos: Vector3,
-    pocket_radius: f32,
+    pockets: &[Pocket],
 ) -> ShotTest {
     let raycast = cue_raycast(shot_dir, cue_ball_pos, object_ball_pos);
     let white_end = raycast.ghost_pos;
 
     if !raycast.hit_object_ball {
-        return ShotTest {
-            white_end,
-            red_path: None,
-            gate_state: GateState::Miss,
-        };
+        return ShotTest { white_end, red_path: None, pocketed: None };
     }
 
     // Object ball departs along the line from the contact point through its
@@ -263,36 +267,44 @@ pub fn test_shot(
     let rdz = object_ball_pos.z - white_end.z;
     let rlen = (rdx * rdx + rdz * rdz).sqrt();
     if rlen < 1e-5 {
-        return ShotTest {
-            white_end,
-            red_path: None,
-            gate_state: GateState::Miss,
-        };
+        return ShotTest { white_end, red_path: None, pocketed: None };
     }
     let (rdx, rdz) = (rdx / rlen, rdz / rlen);
 
     let t_red_cushion = cushion_t(object_ball_pos.x, object_ball_pos.z, rdx, rdz);
 
-    // Fits through the gate only if the ball's edge clears *both* fixed
-    // jaw points by BALL_RADIUS -- checked directly as the perpendicular
+    // Fits through a gate only if the ball's edge clears *both* fixed jaw
+    // points by BALL_RADIUS -- checked directly as the perpendicular
     // distance from each jaw to the ball's actual path line -- and its
     // center's path actually crosses between them (ray_segment_t). The
     // drawn post (GATE_POST_RADIUS) is just a visual marker for the jaw's
     // location, not a real obstacle -- real pockets have no post there --
-    // so it plays no part in this check.
-    let (jaw_a, jaw_b) = pocket_jaws(pocket_pos, pocket_radius);
+    // so it plays no part in this check. Checked against every pocket
+    // (not just the target), taking whichever gate the path reaches first
+    // -- a straight line can plausibly clear more than one pocket's jaws
+    // at once (e.g. skimming past a middle pocket on the way to a corner),
+    // so "first" is what decides which one the ball actually falls into.
     let origin = (object_ball_pos.x, object_ball_pos.z);
-    let clears_jaw = |jaw: (f32, f32)| {
-        let to_jaw = (jaw.0 - origin.0, jaw.1 - origin.1);
-        cross2((rdx, rdz), to_jaw).abs() >= BALL_RADIUS
-    };
-    let t_gate = (clears_jaw(jaw_a) && clears_jaw(jaw_b))
-        .then(|| ray_segment_t(origin, (rdx, rdz), jaw_a, jaw_b))
-        .flatten();
+    let mut earliest_gate: Option<(usize, f32)> = None;
+    for (i, pocket) in pockets.iter().enumerate() {
+        let (jaw_a, jaw_b) = pocket_jaws(pocket.position, pocket.radius);
+        let clears_jaw = |jaw: (f32, f32)| {
+            let to_jaw = (jaw.0 - origin.0, jaw.1 - origin.1);
+            cross2((rdx, rdz), to_jaw).abs() >= BALL_RADIUS
+        };
+        if !(clears_jaw(jaw_a) && clears_jaw(jaw_b)) {
+            continue;
+        }
+        if let Some(t) = ray_segment_t(origin, (rdx, rdz), jaw_a, jaw_b) {
+            if earliest_gate.is_none_or(|(_, best_t)| t < best_t) {
+                earliest_gate = Some((i, t));
+            }
+        }
+    }
 
-    let (red_end_t, gate_state) = match t_gate {
-        Some(t_gate) => (t_gate, GateState::Success),
-        None => (t_red_cushion, GateState::Miss),
+    let (red_end_t, pocketed) = match earliest_gate {
+        Some((i, t)) => (t, Some(i)),
+        None => (t_red_cushion, None),
     };
     let red_end = Vector3::new(
         object_ball_pos.x + rdx * red_end_t,
@@ -303,7 +315,7 @@ pub fn test_shot(
     ShotTest {
         white_end,
         red_path: Some((object_ball_pos, red_end)),
-        gate_state,
+        pocketed,
     }
 }
 
@@ -382,4 +394,49 @@ pub fn draw_object_ball_aim_line(d: &mut impl RaylibDraw3D, ghost_pos: Vector3, 
         object_ball_pos.z + uz * t_cushion,
     );
     d.draw_line3D(start, end, AIM_LINE_COLOR);
+}
+
+#[cfg(test)]
+mod pot_tests {
+    use super::*;
+    use crate::table::pockets;
+
+    /// Builds a cue/object ball pair such that a dead-straight shot sends
+    /// the object ball directly at `pockets[target_idx]`, then runs
+    /// `test_shot` and asserts it's recognized as potted there. Regression
+    /// coverage for a bug where comparing the gate crossing's `t` against
+    /// `cushion_t` made every pot impossible (see `test_shot`'s doc
+    /// comment) -- caught because it broke potting into every pocket, not
+    /// just non-target ones, once gates were checked for all of them.
+    fn assert_pots(object_ball_pos: Vector3, target_idx: usize) {
+        let pockets = pockets();
+        let target = pockets[target_idx].position;
+        let dx = target.x - object_ball_pos.x;
+        let dz = target.z - object_ball_pos.z;
+        let len = (dx * dx + dz * dz).sqrt();
+        let dir = (dx / len, dz / len);
+
+        // Cue ball placed so its contact point with the object ball sends
+        // the object ball exactly along `dir` (standard ghost-ball offset,
+        // approaching from further back along the same line).
+        let contact = Vector3::new(
+            object_ball_pos.x - dir.0 * BALL_RADIUS * 2.0,
+            BALL_RADIUS,
+            object_ball_pos.z - dir.1 * BALL_RADIUS * 2.0,
+        );
+        let cue_ball_pos = Vector3::new(contact.x - dir.0 * 0.3, BALL_RADIUS, contact.z - dir.1 * 0.3);
+
+        let result = test_shot(dir, cue_ball_pos, object_ball_pos, &pockets);
+        assert_eq!(result.pocketed, Some(target_idx));
+    }
+
+    #[test]
+    fn pots_into_middle_pocket() {
+        assert_pots(Vector3::new(0.0, BALL_RADIUS, 0.0), 4);
+    }
+
+    #[test]
+    fn pots_into_corner_pocket() {
+        assert_pots(Vector3::new(0.0, BALL_RADIUS, 1.0), 2);
+    }
 }

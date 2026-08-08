@@ -12,8 +12,8 @@ use crate::cue::{draw_cue, draw_cue_model};
 use crate::cushion_segments::{CUSHION_BOUNDARY, SHORT_RAIL_BOUNDARY};
 use crate::shot::{
     best_pocket, cue_raycast, draw_gate, draw_object_ball_aim_line, draw_path_stripe,
-    random_shot_setup, test_shot, GateState, ShotTest, GATE_MISS_COLOR, GATE_NEUTRAL_COLOR,
-    GATE_SUCCESS_COLOR, GHOST_BALL_COLOR, GHOST_RED_BALL_COLOR, PATH_RED_COLOR, PATH_WHITE_COLOR,
+    random_shot_setup, test_shot, ShotTest, GATE_MISS_COLOR, GATE_NEUTRAL_COLOR, GATE_SUCCESS_COLOR,
+    GHOST_BALL_COLOR, GHOST_RED_BALL_COLOR, PATH_RED_COLOR, PATH_WHITE_COLOR,
 };
 use crate::table::{
     draw_ball_collision_ring, draw_light_fixture, draw_table, Pocket, CUE_BALL_COLOR,
@@ -174,14 +174,7 @@ impl GameState {
             rl.is_key_pressed(KeyboardKey::KEY_SPACE) || (tap && ui.test.hit(mouse)),
             shot_dir,
         ) {
-            let pocket_idx = self.target_pocket;
-            self.shot_test = Some(test_shot(
-                dir,
-                self.cue_ball_pos,
-                self.object_ball_pos,
-                pockets[pocket_idx].position,
-                pockets[pocket_idx].radius,
-            ));
+            self.shot_test = Some(test_shot(dir, self.cue_ball_pos, self.object_ball_pos, pockets));
         }
     }
 
@@ -462,9 +455,9 @@ impl GameState {
         }
     }
 
-    /// The full 3D scene: table, lights, collision-debug overlay, both
-    /// balls, cue, ghost ball + aim line, gate, and any frozen shot-test
-    /// paths.
+    /// The full 3D scene: table, lights, collision-debug overlay (cushion
+    /// boundaries, collision rings, every pocket's gate), both balls, cue,
+    /// ghost ball + aim line, and any frozen shot-test paths.
     pub fn draw_scene(&self, d3: &mut (impl RaylibDraw3D + RaylibRlgl), assets: &mut Assets, shot_dir: Option<(f32, f32)>) {
         // A bit see-through in collision-debug mode so the boundary lines
         // and ball collision circles (both drawn on top) aren't hidden
@@ -599,18 +592,26 @@ impl GameState {
             }
         }
 
-        let pocket_idx = self.target_pocket;
-        let gate_color = match self.shot_test.as_ref().map(|s| &s.gate_state) {
-            Some(GateState::Success) => GATE_SUCCESS_COLOR,
-            Some(GateState::Miss) => GATE_MISS_COLOR,
-            None => GATE_NEUTRAL_COLOR,
-        };
-        draw_gate(
-            d3,
-            assets.pockets[pocket_idx].position,
-            assets.pockets[pocket_idx].radius,
-            gate_color,
-        );
+        // Gates are a debug visualization -- ball generation only ever
+        // needs *a* makeable pocket to exist (see `best_pocket`), not that
+        // every pocket's gate be visible during normal play, so all of
+        // them (including the target's) live behind the same toggle as the
+        // cushion-boundary/collision-ring overlay above.
+        if self.show_collision_debug {
+            for (i, pocket) in assets.pockets.iter().enumerate() {
+                // Green for whichever pocket the ball actually fell into
+                // (not necessarily the target); red for the target pocket
+                // only on a true miss -- nothing potted anywhere -- since
+                // potting a different pocket is still a pot, not a miss;
+                // neutral otherwise.
+                let color = match &self.shot_test {
+                    Some(test) if test.pocketed == Some(i) => GATE_SUCCESS_COLOR,
+                    Some(test) if test.pocketed.is_none() && i == self.target_pocket => GATE_MISS_COLOR,
+                    _ => GATE_NEUTRAL_COLOR,
+                };
+                draw_gate(d3, pocket.position, pocket.radius, color);
+            }
+        }
 
         if let Some(test) = &self.shot_test {
             draw_path_stripe(d3, self.cue_ball_pos, test.white_end, PATH_WHITE_COLOR);
