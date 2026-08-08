@@ -1,6 +1,7 @@
 {
   "sets": [
     { "id": "blue_spot_cuts", "file": "blue_spot_cuts.json" },
-    { "id": "baulk_corner_practice", "file": "baulk_corner_practice.json" }
+    { "id": "baulk_corner_practice", "file": "baulk_corner_practice.json" },
+    { "id": "line_up", "file": "line_up.json" }
   ]
 }

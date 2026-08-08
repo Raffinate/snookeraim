@@ -2,7 +2,7 @@ use raylib::prelude::*;
 
 use crate::cue::CUE_MODEL_PATH;
 use crate::grid::GridSpec;
-use crate::puzzle::{self, PuzzleSet, PUZZLES_DIR};
+use crate::puzzle::{self, PuzzleSet, GRID_PATH, PUZZLES_DIR};
 use crate::shaders::{BALL_FS, BALL_VS, GHOST_FS, TABLE_FS};
 use crate::table::{
     self, BALLS_MODEL_PATH, BALL_RADIUS, GALLERY_MODEL_PATH, LIGHT_COLOR_INTENSITY,
@@ -116,7 +116,7 @@ impl Assets {
             .load_model(thread, SKY_MODEL_PATH)
             .expect("failed to load assets/sky.glb");
 
-        let grid = GridSpec::build();
+        let grid = GridSpec::load(GRID_PATH);
         let puzzle_sets = puzzle::load_all(PUZZLES_DIR, &grid);
 
         Assets {
