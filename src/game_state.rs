@@ -624,9 +624,12 @@ impl GameState {
             .map_or(self.object_ball_pos, |t| t.red_path.map_or(self.object_ball_pos, |(_, end)| end));
 
         if self.show_collision_debug {
-            // Both tables only cover their own non-negative half (each
-            // rail is symmetric about its own center), so mirror both
-            // X and Z for each. Drawn directly from the raw CUSHION_
+            // Both tables now hold their own rail's full signed span (see
+            // cushion_segments.rs) -- only the *other* axis still needs
+            // mirroring, since that one picks between two genuinely
+            // separate physical rails (left/right long rail; near/far
+            // short rail) rather than folding a single rail's own
+            // self-symmetry. Drawn directly from the raw CUSHION_
             // BOUNDARY/SHORT_RAIL_BOUNDARY values -- the cushion's real
             // physical surface. A moving ball's *center*, during a shot,
             // stops short of this exact line by the ball's cross-
@@ -637,25 +640,21 @@ impl GameState {
             for w in CUSHION_BOUNDARY.windows(2) {
                 let ([z0, x0], [z1, x1]) = (w[0], w[1]);
                 for &sx in &[1.0, -1.0] {
-                    for &sz in &[1.0, -1.0] {
-                        d3.draw_line3D(
-                            Vector3::new(sx * x0, 0.02, sz * z0),
-                            Vector3::new(sx * x1, 0.02, sz * z1),
-                            Color::MAGENTA,
-                        );
-                    }
+                    d3.draw_line3D(
+                        Vector3::new(sx * x0, 0.02, z0),
+                        Vector3::new(sx * x1, 0.02, z1),
+                        Color::MAGENTA,
+                    );
                 }
             }
             for w in SHORT_RAIL_BOUNDARY.windows(2) {
                 let ([x0, z0], [x1, z1]) = (w[0], w[1]);
-                for &sx in &[1.0, -1.0] {
-                    for &sz in &[1.0, -1.0] {
-                        d3.draw_line3D(
-                            Vector3::new(sx * x0, 0.02, sz * z0),
-                            Vector3::new(sx * x1, 0.02, sz * z1),
-                            Color::CYAN,
-                        );
-                    }
+                for &sz in &[1.0, -1.0] {
+                    d3.draw_line3D(
+                        Vector3::new(x0, 0.02, sz * z0),
+                        Vector3::new(x1, 0.02, sz * z1),
+                        Color::CYAN,
+                    );
                 }
             }
 
@@ -789,6 +788,18 @@ impl GameState {
         puzzle_status: Option<&str>,
     ) {
         d.draw_fps(10, 10);
+        if self.show_collision_debug {
+            d.draw_text(
+                &format!(
+                    "cam ({:.3}, {:.3}, {:.3})",
+                    self.camera.position.x, self.camera.position.y, self.camera.position.z
+                ),
+                10,
+                86,
+                18,
+                Color::CYAN,
+            );
+        }
         if self.view_mode {
             d.draw_text("VIEW MODE (cue aim frozen)", 10, 36, 18, Color::YELLOW);
         }

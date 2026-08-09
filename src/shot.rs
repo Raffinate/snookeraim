@@ -103,7 +103,7 @@ pub fn best_pocket(
 
         let ghost_x = object_ball_pos.x + approach_from.0 * BALL_RADIUS * 2.0;
         let ghost_z = object_ball_pos.z + approach_from.1 * BALL_RADIUS * 2.0;
-        if ghost_x.abs() > safe_half_width(ghost_z.abs()) || ghost_z.abs() > safe_half_length(ghost_x.abs()) {
+        if ghost_x.abs() > safe_half_width(ghost_z) || ghost_z.abs() > safe_half_length(ghost_x) {
             continue; // cue ball couldn't physically sit here
         }
 

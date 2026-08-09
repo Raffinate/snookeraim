@@ -101,21 +101,26 @@ pub fn draw_ball_collision_ring(d: &mut impl RaylibDraw3D, center: Vector3, colo
     }
 }
 
-/// Safe X boundary (for a ball's *center*) at a given |z|, against the
-/// long rails: the measured cushion boundary minus the ball's own
+/// Safe X boundary (for a ball's *center*) at a given (signed) z, against
+/// the long rails: the measured cushion boundary minus the ball's own
 /// cross-sectional radius *at the real contact height*
 /// (`CUSHION_CONTACT_RADIUS`, not the full `BALL_RADIUS` -- the cushion
 /// nose strikes above the ball's equator, see that constant's own
 /// comment) and a clearance margin -- so a ball's *edge*, not its
 /// center, is what actually reaches the drawn boundary line.
-pub fn safe_half_width(abs_z: f32) -> f32 {
-    boundary_lookup(CUSHION_BOUNDARY, abs_z) - CUSHION_CONTACT_RADIUS - CUSHION_CLEARANCE
+///
+/// `CUSHION_BOUNDARY` holds the rail's full signed span (see
+/// cushion_segments.rs), so `z` is passed through as-is, not `.abs()`'d --
+/// folding it would throw away the real per-side data the table now
+/// carries and fall back to mirroring around a single half again.
+pub fn safe_half_width(z: f32) -> f32 {
+    boundary_lookup(CUSHION_BOUNDARY, z) - CUSHION_CONTACT_RADIUS - CUSHION_CLEARANCE
 }
 
-/// Safe Z boundary (for a ball's *center*) at a given |x|, against the
-/// short rails. See `safe_half_width`'s doc comment.
-pub fn safe_half_length(abs_x: f32) -> f32 {
-    boundary_lookup(SHORT_RAIL_BOUNDARY, abs_x) - CUSHION_CONTACT_RADIUS - CUSHION_CLEARANCE
+/// Safe Z boundary (for a ball's *center*) at a given (signed) x, against
+/// the short rails. See `safe_half_width`'s doc comment.
+pub fn safe_half_length(x: f32) -> f32 {
+    boundary_lookup(SHORT_RAIL_BOUNDARY, x) - CUSHION_CONTACT_RADIUS - CUSHION_CLEARANCE
 }
 
 pub const MAX_PLACEMENT_ATTEMPTS: u32 = 300;
@@ -156,12 +161,12 @@ pub fn cushion_t(x: f32, z: f32, dx: f32, dz: f32) -> f32 {
     const MAX_REFINEMENTS: u32 = 8;
     const CONVERGED: f32 = 1e-5;
 
-    let mut t_x = calc_t_x(safe_half_width(z.abs()));
+    let mut t_x = calc_t_x(safe_half_width(z));
     for _ in 0..MAX_REFINEMENTS {
         if !t_x.is_finite() {
             break;
         }
-        let next = calc_t_x(safe_half_width((z + dz * t_x).abs()));
+        let next = calc_t_x(safe_half_width(z + dz * t_x));
         let converged = (next - t_x).abs() < CONVERGED;
         t_x = next;
         if converged {
@@ -169,12 +174,12 @@ pub fn cushion_t(x: f32, z: f32, dx: f32, dz: f32) -> f32 {
         }
     }
 
-    let mut t_z = calc_t_z(safe_half_length(x.abs()));
+    let mut t_z = calc_t_z(safe_half_length(x));
     for _ in 0..MAX_REFINEMENTS {
         if !t_z.is_finite() {
             break;
         }
-        let next = calc_t_z(safe_half_length((x + dx * t_z).abs()));
+        let next = calc_t_z(safe_half_length(x + dx * t_z));
         let converged = (next - t_z).abs() < CONVERGED;
         t_z = next;
         if converged {
@@ -289,8 +294,8 @@ pub fn pockets() -> Vec<Pocket> {
 /// logic that needs the same "is this a legal resting spot" check (see
 /// puzzle.rs's grid-cell sampling).
 pub fn ball_position_clear(pos: Vector3, pockets: &[Pocket]) -> bool {
-    let clear_of_cushion = pos.x.abs() < safe_half_width(pos.z.abs()) - BALL_RADIUS
-        && pos.z.abs() < safe_half_length(pos.x.abs()) - BALL_RADIUS;
+    let clear_of_cushion = pos.x.abs() < safe_half_width(pos.z) - BALL_RADIUS
+        && pos.z.abs() < safe_half_length(pos.x) - BALL_RADIUS;
     let clear_of_pockets = pockets
         .iter()
         .all(|p| pos.distance(p.position) > p.radius + BALL_RADIUS * 2.0);
