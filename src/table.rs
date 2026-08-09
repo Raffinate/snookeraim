@@ -49,6 +49,19 @@ pub const MAX_REALISTIC_CUT_DEG: f32 = 65.0;
 // from z-fighting/clipping into the nose mesh, not a real-world buffer.
 pub const CUSHION_CLEARANCE: f32 = 0.001;
 
+// The cushion nose doesn't strike a ball at its equator (50% of
+// diameter) -- the official WPBSA spec puts it at 0.635 x diameter,
+// i.e. contact height = 0.635 * 2 * BALL_RADIUS = 0.0333375, which is
+// 0.0070875 above the ball's own center height (BALL_RADIUS). Above the
+// equator the ball's own cross-section is narrower than its full radius
+// (the sphere tapers above its widest point), so CUSHION_CONTACT_RADIUS
+// -- sqrt(BALL_RADIUS^2 - 0.0070875^2) -- is that narrower cross-
+// sectional radius at the real contact height: what actually governs
+// how close the ball's *center* can get to the cushion boundary, in
+// place of the full BALL_RADIUS a flat, equator-height contact model
+// would use.
+pub const CUSHION_CONTACT_RADIUS: f32 = 0.0252751;
+
 /// Piecewise-linear lookup shared by safe_half_width/safe_half_length:
 /// interpolates `table`'s second column at `along`, clamped to the
 /// table's own range at either end.
@@ -89,21 +102,26 @@ pub fn draw_ball_collision_ring(d: &mut impl RaylibDraw3D, center: Vector3, colo
 }
 
 /// Safe X boundary (for a ball's *center*) at a given |z|, against the
-/// long rails: the measured cushion boundary minus the ball's own radius
-/// and a clearance margin.
+/// long rails: the measured cushion boundary minus the ball's own
+/// cross-sectional radius *at the real contact height*
+/// (`CUSHION_CONTACT_RADIUS`, not the full `BALL_RADIUS` -- the cushion
+/// nose strikes above the ball's equator, see that constant's own
+/// comment) and a clearance margin -- so a ball's *edge*, not its
+/// center, is what actually reaches the drawn boundary line.
 pub fn safe_half_width(abs_z: f32) -> f32 {
-    boundary_lookup(CUSHION_BOUNDARY, abs_z) - BALL_RADIUS - CUSHION_CLEARANCE
+    boundary_lookup(CUSHION_BOUNDARY, abs_z) - CUSHION_CONTACT_RADIUS - CUSHION_CLEARANCE
 }
 
 /// Safe Z boundary (for a ball's *center*) at a given |x|, against the
-/// short rails.
+/// short rails. See `safe_half_width`'s doc comment.
 pub fn safe_half_length(abs_x: f32) -> f32 {
-    boundary_lookup(SHORT_RAIL_BOUNDARY, abs_x) - BALL_RADIUS - CUSHION_CLEARANCE
+    boundary_lookup(SHORT_RAIL_BOUNDARY, abs_x) - CUSHION_CONTACT_RADIUS - CUSHION_CLEARANCE
 }
+
 pub const MAX_PLACEMENT_ATTEMPTS: u32 = 300;
 
 /// Distance along a ray from `(x, z)` in direction `(dx, dz)` to the
-/// first cushion — i.e. where a ball's center would leave the safe X
+/// first cushion -- i.e. where a ball's center would leave the safe X
 /// range (against the long rails, safe_half_width) or the safe Z range
 /// (against the short rails, safe_half_length), both against the
 /// model's measured geometry.
@@ -127,17 +145,41 @@ pub fn cushion_t(x: f32, z: f32, dx: f32, dz: f32) -> f32 {
         }
     };
 
-    // Both boundaries vary along the rail (narrower near every pocket):
-    // refine each once using the coordinate the ray would actually reach
-    // by its first estimate, since that's what decides which it really
-    // hits.
+    // Both boundaries vary along the rail (narrower/wider near every
+    // pocket, changing steeply right at a corner) -- refine the estimate
+    // using the coordinate the ray would actually reach, repeatedly,
+    // until it stops moving. A single pass isn't enough right at a
+    // corner: it uses the boundary value from an earlier, less-advanced
+    // point along the ray, which can be smaller than the true boundary
+    // at the real stopping point, landing the ball on a too-close
+    // phantom stop instead of the real one.
+    const MAX_REFINEMENTS: u32 = 8;
+    const CONVERGED: f32 = 1e-5;
+
     let mut t_x = calc_t_x(safe_half_width(z.abs()));
-    if t_x.is_finite() {
-        t_x = calc_t_x(safe_half_width((z + dz * t_x).abs()));
+    for _ in 0..MAX_REFINEMENTS {
+        if !t_x.is_finite() {
+            break;
+        }
+        let next = calc_t_x(safe_half_width((z + dz * t_x).abs()));
+        let converged = (next - t_x).abs() < CONVERGED;
+        t_x = next;
+        if converged {
+            break;
+        }
     }
+
     let mut t_z = calc_t_z(safe_half_length(x.abs()));
-    if t_z.is_finite() {
-        t_z = calc_t_z(safe_half_length((x + dx * t_z).abs()));
+    for _ in 0..MAX_REFINEMENTS {
+        if !t_z.is_finite() {
+            break;
+        }
+        let next = calc_t_z(safe_half_length((x + dx * t_z).abs()));
+        let converged = (next - t_z).abs() < CONVERGED;
+        t_z = next;
+        if converged {
+            break;
+        }
     }
 
     t_x.min(t_z)

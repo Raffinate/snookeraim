@@ -626,7 +626,14 @@ impl GameState {
         if self.show_collision_debug {
             // Both tables only cover their own non-negative half (each
             // rail is symmetric about its own center), so mirror both
-            // X and Z for each.
+            // X and Z for each. Drawn directly from the raw CUSHION_
+            // BOUNDARY/SHORT_RAIL_BOUNDARY values -- the cushion's real
+            // physical surface. A moving ball's *center*, during a shot,
+            // stops short of this exact line by the ball's cross-
+            // sectional radius at the real cushion-contact height (see
+            // table.rs's `safe_half_width`/`safe_half_length` and
+            // `CUSHION_CONTACT_RADIUS`), so it's the ball's *edge* that
+            // actually reaches this rendered line, not its center.
             for w in CUSHION_BOUNDARY.windows(2) {
                 let ([z0, x0], [z1, x1]) = (w[0], w[1]);
                 for &sx in &[1.0, -1.0] {
