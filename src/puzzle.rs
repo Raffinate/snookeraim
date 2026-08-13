@@ -158,16 +158,16 @@ mod tests {
     fn sampled_positions_land_within_the_requested_range_and_clear() {
         let grid = GridSpec::load(GRID_PATH);
         let pockets = pockets();
-        // Row 32 / col 3 is the blue spot (z=0, x=0) in the bundled grid.
+        // Row 32 / col 5 is the blue spot (z=0, x=0) in the bundled grid.
         let exercise = Exercise {
             label: None,
-            object_ball: CellRange { row: [32, 32], col: [3, 3] },
+            object_ball: CellRange { row: [32, 32], col: [5, 5] },
             cue_ball: CellRange { row: [0, grid.rows.len() - 1], col: [0, grid.cols.len() - 1] },
         };
 
         for _ in 0..50 {
             let (cue_pos, object_pos) = sample_exercise(&exercise, &grid, &pockets);
-            let (expected_x, expected_z) = grid.world_pos(32, 3);
+            let (expected_x, expected_z) = grid.world_pos(32, 5);
             assert!((object_pos.x - expected_x).abs() < 1e-6 && (object_pos.z - expected_z).abs() < 1e-6);
             assert!(ball_position_clear(cue_pos, &pockets));
             assert!(cue_pos.distance(object_pos) > MIN_BALL_SEPARATION);

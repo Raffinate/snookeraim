@@ -82,6 +82,7 @@ fn main() {
         // happen before `begin_drawing` starts borrowing it exclusively for
         // the rest of the frame's drawing.
         let pot_marker = state.shot_result_marker(&rl);
+        let grid_labels = state.grid_debug_labels(&rl, &assets.grid);
         let puzzle_status = state.puzzle_status_text(&assets);
 
         let mut d = rl.begin_drawing(&thread);
@@ -102,6 +103,7 @@ fn main() {
             screen_h,
             pot_marker,
             puzzle_status.as_deref(),
+            &grid_labels,
         );
     }
 }

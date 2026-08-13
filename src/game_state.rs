@@ -10,6 +10,7 @@ use crate::camera::{
 };
 use crate::cue::{draw_cue, draw_cue_model};
 use crate::cushion_segments::{CUSHION_BOUNDARY, SHORT_RAIL_BOUNDARY};
+use crate::grid::GridSpec;
 use crate::puzzle::sample_exercise;
 use crate::shot::{
     best_pocket, cue_raycast, draw_object_ball_aim_line, draw_path_stripe, draw_pocket_boundary,
@@ -17,7 +18,7 @@ use crate::shot::{
     GHOST_BALL_COLOR, GHOST_RED_BALL_COLOR, PATH_RED_COLOR, PATH_WHITE_COLOR,
 };
 use crate::table::{
-    draw_ball_collision_ring, draw_light_fixture, draw_table, Pocket, BALL_RADIUS, CUE_BALL_COLOR,
+    draw_ball_collision_ring, draw_grid_point, draw_light_fixture, draw_table, Pocket, BALL_RADIUS, CUE_BALL_COLOR,
     CUE_BALL_MESH_INDEX, CUE_BALL_MODEL_CENTER, GALLERY_MODEL_OFFSET_X, GALLERY_MODEL_OFFSET_Y,
     GALLERY_MODEL_OFFSET_Z, OBJECT_BALL_COLOR, RED_BALL_MESH_INDEX, RED_BALL_MODEL_CENTER,
     TABLE_MODEL_OFFSET_X, TABLE_MODEL_OFFSET_Y, TABLE_MODEL_OFFSET_Z, USE_GALLERY_MODEL,
@@ -176,6 +177,34 @@ impl GameState {
         let ball_pos = test.red_path.map_or(self.object_ball_pos, |(_, end)| end);
         let above = Vector3::new(ball_pos.x, ball_pos.y + BALL_RADIUS * 4.0, ball_pos.z);
         Some((rl.get_world_to_screen(above, self.camera), test.pocketed.is_some()))
+    }
+
+    /// Screen positions (plus row index / signed col offset) for every
+    /// puzzle-grid point, for the collision-debug overlay's "(row, col)"
+    /// labels -- empty outside debug mode, since projecting all ~700
+    /// points every frame is wasted work nobody's looking at. Projected
+    /// here (needs `rl`) rather than in `draw_overlay`, same reason as
+    /// `shot_result_marker`.
+    ///
+    /// Columns display as a signed offset from the table's center column
+    /// (0 in the middle, negative left / positive right) rather than the
+    /// raw 0-based array index used everywhere else (grid.rs, puzzle
+    /// JSON) -- display-only, doesn't touch puzzle-set addressing. Rows
+    /// display as the raw index, unchanged.
+    pub fn grid_debug_labels(&self, rl: &RaylibHandle, grid: &GridSpec) -> Vec<(Vector2, usize, i32)> {
+        if !self.show_collision_debug {
+            return Vec::new();
+        }
+        let col_center = (grid.cols.len() as i32 - 1) / 2;
+        let mut labels = Vec::with_capacity(grid.rows.len() * grid.cols.len());
+        for row in 0..grid.rows.len() {
+            for col in 0..grid.cols.len() {
+                let (x, z) = grid.world_pos(row, col);
+                let screen = rl.get_world_to_screen(Vector3::new(x, 0.02, z), self.camera);
+                labels.push((screen, row, col as i32 - col_center));
+            }
+        }
+        labels
     }
 
     /// Shift+`\`` toggles the collision-debug overlay; `?`/the help button
@@ -660,6 +689,18 @@ impl GameState {
 
             draw_ball_collision_ring(d3, cue_ball_draw_pos, Color::YELLOW);
             draw_ball_collision_ring(d3, object_ball_draw_pos, Color::ORANGE);
+
+            // Puzzle-grid points (see grid.rs / assets/puzzles/grid.json) --
+            // a tiny ring at every (row, col) cell; the "(row, col)" text
+            // labels themselves are a 2D overlay (see draw_overlay /
+            // GameState::grid_debug_labels), since raylib has no built-in
+            // billboarded 3D text.
+            for row in 0..assets.grid.rows.len() {
+                for col in 0..assets.grid.cols.len() {
+                    let (x, z) = assets.grid.world_pos(row, col);
+                    draw_grid_point(d3, Vector3::new(x, 0.02, z), Color::SKYBLUE);
+                }
+            }
         }
 
         if USE_MODEL_PROPS {
@@ -772,9 +813,9 @@ impl GameState {
     }
 
     /// 2D overlay: FPS, the view-mode label, the active puzzle exercise's
-    /// status line, the last tested shot's pot/miss marker, every on-screen
-    /// control, and whichever popup (help, pause menu, puzzle picker) is
-    /// open.
+    /// status line, the last tested shot's pot/miss marker, grid-point
+    /// coordinate labels (collision-debug only), every on-screen control,
+    /// and whichever popup (help, pause menu, puzzle picker) is open.
     pub fn draw_overlay(
         &self,
         d: &mut RaylibDrawHandle,
@@ -786,6 +827,7 @@ impl GameState {
         screen_h: i32,
         pot_marker: Option<(Vector2, bool)>,
         puzzle_status: Option<&str>,
+        grid_labels: &[(Vector2, usize, i32)],
     ) {
         d.draw_fps(10, 10);
         if self.show_collision_debug {
@@ -799,6 +841,22 @@ impl GameState {
                 18,
                 Color::CYAN,
             );
+            for &(screen_pos, row, col) in grid_labels {
+                // Off-screen points still get projected (see
+                // grid_debug_labels) but aren't worth the draw call.
+                if screen_pos.x < -40.0 || screen_pos.x > screen_w as f32 + 40.0
+                    || screen_pos.y < -20.0 || screen_pos.y > screen_h as f32 + 20.0
+                {
+                    continue;
+                }
+                d.draw_text(
+                    &format!("({row},{col})"),
+                    screen_pos.x as i32 + 4,
+                    screen_pos.y as i32 - 6,
+                    10,
+                    Color::SKYBLUE,
+                );
+            }
         }
         if self.view_mode {
             d.draw_text("VIEW MODE (cue aim frozen)", 10, 36, 18, Color::YELLOW);

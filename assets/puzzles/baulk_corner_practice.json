@@ -3,9 +3,9 @@
   "name": "Baulk Corner Practice",
   "description": "Object ball on the baulk-line spots (brown/green/yellow, grid row 52 = z=1.05, the D end), cue ball up-table (low row index, toward black/pink) -- classic corner-pocket practice from the D. Grid: rows step 0.0525m, cols step 0.146m -- see assets/puzzles/grid.json.",
   "exercises": [
-    { "label": "Brown, straight up-table", "object_ball": { "row": [52, 52], "col": [3, 3] }, "cue_ball": { "row": [0, 20], "col": [1, 5] } },
-    { "label": "Green, cut toward the near corner", "object_ball": { "row": [52, 52], "col": [1, 1] }, "cue_ball": { "row": [15, 30], "col": [5, 6] } },
-    { "label": "Yellow, cut toward the near corner", "object_ball": { "row": [52, 52], "col": [5, 5] }, "cue_ball": { "row": [15, 30], "col": [0, 1] } },
-    { "label": "Brown, cut into a top corner", "object_ball": { "row": [52, 52], "col": [3, 3] }, "cue_ball": { "row": [0, 8], "col": [5, 6] } }
+    { "label": "Brown, straight up-table", "object_ball": { "row": [52, 52], "col": [5, 5] }, "cue_ball": { "row": [0, 20], "col": [3, 7] } },
+    { "label": "Green, cut toward the near corner", "object_ball": { "row": [52, 52], "col": [3, 3] }, "cue_ball": { "row": [15, 30], "col": [7, 8] } },
+    { "label": "Yellow, cut toward the near corner", "object_ball": { "row": [52, 52], "col": [7, 7] }, "cue_ball": { "row": [15, 30], "col": [2, 3] } },
+    { "label": "Brown, cut into a top corner", "object_ball": { "row": [52, 52], "col": [5, 5] }, "cue_ball": { "row": [0, 8], "col": [7, 8] } }
   ]
 }

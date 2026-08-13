@@ -101,6 +101,22 @@ pub fn draw_ball_collision_ring(d: &mut impl RaylibDraw3D, center: Vector3, colo
     }
 }
 
+/// A tiny ring marking one puzzle-grid point (see grid.rs), for the
+/// collision-debug overlay -- much smaller than `draw_ball_collision_ring`
+/// since this just needs to be visible on the felt, not represent a real
+/// physical footprint.
+pub fn draw_grid_point(d: &mut impl RaylibDraw3D, center: Vector3, color: Color) {
+    const SEGMENTS: usize = 10;
+    const RADIUS: f32 = 0.006;
+    let mut prev = Vector3::new(center.x + RADIUS, center.y, center.z);
+    for i in 1..=SEGMENTS {
+        let a = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        let next = Vector3::new(center.x + RADIUS * a.cos(), center.y, center.z + RADIUS * a.sin());
+        d.draw_line3D(prev, next, color);
+        prev = next;
+    }
+}
+
 /// Safe X boundary (for a ball's *center*) at a given (signed) z, against
 /// the long rails: the measured cushion boundary minus the ball's own
 /// cross-sectional radius *at the real contact height*
