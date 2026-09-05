@@ -15,9 +15,8 @@ pub const CAMERA_BACK_DISTANCE: f32 = 0.7; // behind the cue ball, away from the
 // the potting line itself, so it deliberately ignores the current aim.
 pub const CAMERA_CLOSE_BACK_DISTANCE: f32 = 0.42; // preset 1: right above/close behind the cue ball
 pub const CAMERA_CLOSE_ELEVATION_DEG: f32 = 12.0;
-pub const CAMERA_STANCE_BACK_DISTANCE: f32 = 1.1; // preset 2: standing back, sizing up the shot
+pub const CAMERA_STANCE_BACK_DISTANCE: f32 = 1.1; // preset 2: standing back on the aim line, sizing up the shot
 pub const CAMERA_STANCE_ELEVATION_DEG: f32 = 30.0;
-pub const CAMERA_STANCE_LATERAL_OFFSET: f32 = 0.28; // shifted left of the aim line
 // Preset 3 stands well back from the *object* ball rather than the cue
 // ball -- reusing preset 2's distance still read as too close, likely
 // because the object ball sits close to cushions/pockets far more often
@@ -80,24 +79,18 @@ pub fn aiming_camera(cue_ball_pos: Vector3, object_ball_pos: Vector3) -> Camera3
     Camera3D::perspective(position, cue_ball_pos, Vector3::new(0.0, 1.0, 0.0), 45.0)
 }
 
-/// Repositions `camera` into a fixed "sighting stance" relative to the cue
-/// ball, without touching where it's currently aimed: the camera's existing
-/// horizontal bearing (`shot_direction_xz`) is kept and only the distance
-/// behind the ball, elevation, and sideways offset change. The lateral
-/// offset shifts *both* position and target together (the same trick
-/// panning uses) rather than sliding position sideways while target stays
-/// pinned to the ball -- pinning the target would rotate the
-/// position-to-target vector itself, which is exactly the aim direction,
-/// so standing "to the side" would silently re-aim the shot. Falls back to
-/// looking toward the object ball when the camera has no defined bearing
-/// yet (looking straight up/down). Used by camera presets 1 and 2.
+/// Repositions `camera` into a fixed "sighting stance" directly behind the
+/// cue ball on the current aim line, without touching where it's currently
+/// aimed: the camera's existing horizontal bearing (`shot_direction_xz`) is
+/// kept and only the distance behind the ball and elevation change. Falls
+/// back to looking toward the object ball when the camera has no defined
+/// bearing yet (looking straight up/down). Used by camera presets 1 and 2.
 pub fn apply_aim_stance(
     camera: &mut Camera3D,
     cue_ball_pos: Vector3,
     object_ball_pos: Vector3,
     back_distance: f32,
     elevation_deg: f32,
-    lateral_offset: f32,
 ) {
     let (fx, fz) = shot_direction_xz(*camera).unwrap_or_else(|| {
         let dx = object_ball_pos.x - cue_ball_pos.x;
@@ -105,16 +98,14 @@ pub fn apply_aim_stance(
         let len = (dx * dx + dz * dz).sqrt().max(1e-4);
         (dx / len, dz / len)
     });
-    let (lx, lz) = (fz, -fx); // left of the forward direction, in the table plane
 
-    let pivot = Vector3::new(
-        cue_ball_pos.x + lx * lateral_offset,
-        cue_ball_pos.y,
-        cue_ball_pos.z + lz * lateral_offset,
+    let height = cue_ball_pos.y + back_distance * elevation_deg.to_radians().tan();
+    camera.position = Vector3::new(
+        cue_ball_pos.x - fx * back_distance,
+        height,
+        cue_ball_pos.z - fz * back_distance,
     );
-    let height = pivot.y + back_distance * elevation_deg.to_radians().tan();
-    camera.position = Vector3::new(pivot.x - fx * back_distance, height, pivot.z - fz * back_distance);
-    camera.target = pivot;
+    camera.target = cue_ball_pos;
 }
 
 /// Camera preset 3: stands at the object ball, on the line away from the

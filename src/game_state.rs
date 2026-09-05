@@ -4,8 +4,8 @@ use crate::assets::Assets;
 use crate::camera::{
     aiming_camera, apply_aim_stance, cursor_table_point, pot_line_camera, rotate_sensitivity,
     screen_ray_table_point, zoom_toward, CAMERA_CLOSE_BACK_DISTANCE, CAMERA_CLOSE_ELEVATION_DEG,
-    CAMERA_STANCE_BACK_DISTANCE, CAMERA_STANCE_ELEVATION_DEG, CAMERA_STANCE_LATERAL_OFFSET,
-    KEY_ROTATE_SPEED_DEG, PAN_SPEED, PINCH_ZOOM_SENSITIVITY, WHEEL_ZOOM_SENSITIVITY,
+    CAMERA_STANCE_BACK_DISTANCE, CAMERA_STANCE_ELEVATION_DEG, KEY_ROTATE_SPEED_DEG,
+    PAN_SPEED, PINCH_ZOOM_SENSITIVITY, WHEEL_ZOOM_SENSITIVITY,
     ZOOM_BUTTON_SPEED,
 };
 use crate::cue::{draw_cue, draw_cue_model};
@@ -81,7 +81,6 @@ fn default_aim_camera(cue_ball_pos: Vector3, object_ball_pos: Vector3) -> Camera
         object_ball_pos,
         CAMERA_STANCE_BACK_DISTANCE,
         CAMERA_STANCE_ELEVATION_DEG,
-        CAMERA_STANCE_LATERAL_OFFSET,
     );
     camera
 }
@@ -563,7 +562,6 @@ impl GameState {
                     self.object_ball_pos,
                     CAMERA_CLOSE_BACK_DISTANCE,
                     CAMERA_CLOSE_ELEVATION_DEG,
-                    0.0,
                 );
             } else {
                 apply_aim_stance(
@@ -572,7 +570,6 @@ impl GameState {
                     self.object_ball_pos,
                     CAMERA_STANCE_BACK_DISTANCE,
                     CAMERA_STANCE_ELEVATION_DEG,
-                    CAMERA_STANCE_LATERAL_OFFSET,
                 );
             }
         }
